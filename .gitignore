@@ -1,0 +1,28 @@
+# --- Security (Critical) ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+build/
+dist/
+
+# --- Data Persistence ---
+# We generally don't want to commit the local database/ban list state
+data/
+*.json
+!src/data/.keep
+
+# --- OS & IDE ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Logs ---
+*.log
+logs/

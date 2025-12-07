@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  atrioly-bot:
+	container_name: atrioly_wanatring
+	build: .
+	restart: always
+	env_file: .env
+	volumes:
+	  - ./data:/app/data
+	logging:
+	  driver: "json-file"
+	  options:
+		max-size: "10m"
+		max-file: "3"
