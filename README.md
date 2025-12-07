@@ -19,7 +19,7 @@ In an era of information overload, **Wanatring** acts as a cognitive filter. It 
 ## 🧠 Intelligence Layers
 
 ### 1. The Membership Radar (Signal Detection)
-The Agent constantly monitors specific groups. Unlike simple keyword searchers, it uses **GPT-4o** to understand context.
+The Agent constantly monitors specific groups. Unlike simple keyword searchers, it uses **gpt-5-mini** to understand context.
 * **Intent Recognition**: Distinguishes between a *request* ("I need a Netflix slot") and an *offer* ("I have a Netflix slot").
 * **Data Extraction**: Automatically parses price, platform, and restrictions into a structured "Opportunity Card."
 * **Supported Platforms**: Netflix, Disney+, YouTube Premium, HBO Max, Prime Video, Apple TV+, Spotify.
@@ -76,7 +76,7 @@ OWNER_IDS=123456789
 FORWARD_TO=123456789
 
 # --- System ---
-DEFAULT_MODEL=gpt-4o-mini
+DEFAULT_MODEL=gpt-5-mini
 LOG_LEVEL=INFO
 ```
 

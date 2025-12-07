@@ -19,7 +19,7 @@
 ## 🧠 智能分层 (Intelligence Layers)
 
 ### 1. 会员雷达 (信号侦测)
-代理持续监听特定群组。与简单的关键词搜索不同，它使用 **GPT-4o** 理解语境。
+代理持续监听特定群组。与简单的关键词搜索不同，它使用 **gpt-5-mini** 理解语境。
 * **意图识别**：精准区分 *需求* ("求租 Netflix 车位") 与 *供应* ("有一个 Netflix 车位")。
 * **数据提取**：自动将价格、平台及限制条件解析为结构化的“机会卡片”。
 * **支持平台**：Netflix, Disney+, YouTube Premium, HBO Max, Prime Video, Apple TV+, Spotify。
@@ -76,7 +76,7 @@ OWNER_IDS=123456789
 FORWARD_TO=123456789
 
 # --- 系统配置 ---
-DEFAULT_MODEL=gpt-4o-mini
+DEFAULT_MODEL=gpt-5-mini
 LOG_LEVEL=INFO
 ```
 
@@ -120,7 +120,7 @@ docker-compose logs -f
       * *若匹配模式*：**丢弃 (DROP)** (结束)。
 3.  **关联性触发** → 检查关键词（如 "Netflix", "合租"）。
       * *若无关*：**忽略 (IGNORE)**。
-4.  **AI 分析** → `ai_agent.py` 发送至 GPT-4o。
+4.  **AI 分析** → `ai_agent.py` 发送至 gpt-5-mini。
       * *若是垃圾信息*：**警告用户 (WARN)** (打击数 +1)。若打击数 ≥ 3，**封禁 (BAN)**。
       * *若是有效合租*：**转发 (FORWARD)** 详细摘要给管理员。
 

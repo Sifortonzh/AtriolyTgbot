@@ -7,7 +7,7 @@ class Settings(BaseSettings):
 	OPENAI_API_KEY: str | None = None
 	OWNER_IDS: Set[int] = set()
 	FORWARD_TO: List[int] = []
-	DEFAULT_MODEL: str = "gpt-4o-mini"
+	DEFAULT_MODEL: str = "gpt-5-mini"
 	
 	class Config:
 		env_file = ".env"
