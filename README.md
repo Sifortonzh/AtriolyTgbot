@@ -71,9 +71,9 @@ OPENAI_API_KEY=sk-proj-YourOpenAIKey
 
 # --- Access Control ---
 # Your numeric Telegram ID (get from @userinfobot)
-OWNER_IDS=123456789
+OWNER_IDS=[123456789]
 # Who receives the membership alerts?
-FORWARD_TO=123456789
+FORWARD_TO=[123456789]
 
 # --- System ---
 DEFAULT_MODEL=gpt-5-mini

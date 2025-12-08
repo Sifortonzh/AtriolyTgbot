@@ -71,9 +71,9 @@ OPENAI_API_KEY=sk-proj-YourOpenAIKey
 
 # --- 访问控制 ---
 # 你的 Telegram 数字 ID (可通过 @userinfobot 获取)
-OWNER_IDS=123456789
+OWNER_IDS=[123456789]
 # 接收合租情报提醒的 ID
-FORWARD_TO=123456789
+FORWARD_TO=[123456789]
 
 # --- 系统配置 ---
 DEFAULT_MODEL=gpt-5-mini
