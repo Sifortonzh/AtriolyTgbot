@@ -6,6 +6,7 @@ from src.config import settings
 from src.services.ai_agent import agent
 from src.services.safety import safety_filter
 from src.services.blacklist_manager import blacklist
+from src.services.state_manager import state_manager
 
 # Setup Logger
 log = logging.getLogger(__name__)
@@ -112,3 +113,101 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 log.error(f"❌ Failed to forward to {admin}: {e}")
     else:
         log.info("📉 AI determined message was NOT a membership offer.")
+
+
+# --- Private Logic (New) ---
+async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user:
+        return
+    text = msg.text or ""
+
+    # 1. Safety Check (Shared Logic)
+    if safety_filter.is_obvious_spam(text):
+        return
+
+    # 2. AI Classification
+    analysis = await agent.analyze_private_message(text)
+
+    # 3. Spam Enforcement
+    if analysis.get("is_spam"):
+        status = blacklist.add_strike(user.id)
+        if status == "banned":
+            await msg.reply_text("🚫 You have been banned for spam.")
+        return
+
+    # 4. Mode Check
+    mode = state_manager.get_mode(user.id)
+    
+    # Mode A: Chat (AI Auto-Reply - Implementation for future, currently acts as Forward)
+    # For now, we always forward to admin even in chat mode so admin knows what's happening.
+    
+    # 5. Forward to Admin (The Bridge)
+    tags = " ".join([f"#{t}" for t in analysis.get('tags', [])])
+    category = analysis.get('category', 'general').upper()
+    summary = analysis.get('summary', 'No summary')
+
+    header = (
+        f"📨 **Private Message** [{category}]\n"
+        f"👤 **From**: {user.full_name} (`{user.id}`)\n"
+        f"🏷 **Tags**: {tags}\n"
+        f"📝 **Summary**: {summary}\n"
+        f"-----------------------------"
+    )
+
+    targets = settings.get_forward_targets()
+    for admin_id in targets:
+        try:
+            # Send Header
+            await context.bot.send_message(chat_id=admin_id, text=header, parse_mode=ParseMode.MARKDOWN)
+            # Forward Original (to keep context/media)
+            fwd_msg = await context.bot.forward_message(
+                chat_id=admin_id,
+                from_chat_id=user.id,
+                message_id=msg.message_id
+            )
+            # Register in Bridge
+            state_manager.register_forward(fwd_msg.message_id, user.id)
+            
+        except Exception as e:
+            log.error(f"Failed to forward DM to {admin_id}: {e}")
+
+    # Feedback to user (Optional)
+    # await msg.reply_text("Your message has been received by support.")
+
+
+# --- Admin Reply Logic (The Bridge) ---
+async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Checks if an Admin is replying to a forwarded message. 
+    If so, sends the reply back to the original user.
+    """
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user:
+        return
+
+    # 1. Security: Only Owners can use the bridge
+    if user.id not in settings.OWNER_IDS:
+        return
+
+    # 2. Check if it's a reply
+    if not msg.reply_to_message:
+        return
+
+    # 3. Lookup Original Sender
+    # Check the ID of the message being replied to
+    original_user_id = state_manager.get_original_sender(msg.reply_to_message.message_id)
+    
+    if not original_user_id:
+        # Fallback: Maybe they replied to the header message? 
+        # (Implementing strict mapping on the forwarded content is safer)
+        return
+
+    # 4. Send Back
+    try:
+        await context.bot.send_message(chat_id=original_user_id, text=msg.text)
+        await msg.reply_text(f"✅ Sent to user `{original_user_id}`")
+    except Exception as e:
+        await msg.reply_text(f"❌ Failed to send: {e}")

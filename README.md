@@ -32,6 +32,22 @@ A ruthless, efficient defense system protecting your attention.
 
 ---
 
+## 📨 Private Service Desk
+
+Wanatring now functions as a comprehensive **Customer Support Agent** for private chats.
+
+### Workflow
+1.  **User DM**: When a user messages the bot privately, the **AI Classifier** analyzes the text.
+2.  **Tagging**: It assigns categories (e.g., `#billing`, `#membership`) and generates a summary.
+3.  **Forwarding**: The processed message is forwarded to the Admin with a structured header.
+4.  **Reply Bridge**: Admins can simply **Reply** to the forwarded message in Telegram. The bot will relay the text back to the original user anonymously.
+
+### Modes (`/mode`)
+* **Forward Mode** (Default): Messages are forwarded to admins for human handling.
+* **Chat Mode**: (Experimental) The AI will attempt to auto-reply to common queries while still notifying admins.
+
+---
+
 ## 📂 Project Structure
 
 The project follows a modular "Service-Oriented" architecture suitable for scaling.
