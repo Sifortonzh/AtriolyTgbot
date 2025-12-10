@@ -1,6 +1,8 @@
 import json
 import logging
 from typing import Dict, Any
+from datetime import datetime
+
 from openai import OpenAI
 from src.config import settings
 
@@ -12,6 +14,8 @@ class AIAgent:
     Unified AI agent for:
     - Group messages: SPAM + Streaming Membership detection
     - Private messages: Category + Tags + Summary + Spam
+    - Owner intent parsing: todo / reminder / days / annis / none
+    - Greeting generation for festivals / anniversaries
     """
 
     def __init__(self):
@@ -19,7 +23,12 @@ class AIAgent:
 
     # ========== Common Helper ==========
 
-    async def _call_gpt(self, system_prompt: str, user_text: str) -> Dict[str, Any]:
+    async def _call_gpt(
+        self,
+        system_prompt: str,
+        user_text: str,
+        model: str | None = None,
+    ) -> Dict[str, Any]:
         """
         Helper to call OpenAI and parse JSON.
         Returns a dict; if error, it will contain {"error": "..."}.
@@ -29,12 +38,12 @@ class AIAgent:
 
         try:
             response = self.client.chat.completions.create(
-                model=settings.DEFAULT_MODEL,
+                model=model or settings.DEFAULT_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_text},
                 ],
-                # 要 JSON 输出，方便后续解析
+                # 强制要求 JSON 输出，方便后续解析
                 response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
@@ -191,6 +200,102 @@ class AIAgent:
             "tags": tags,
             "summary": summary,
         }
+
+    # ========== Owner Intent (todo / reminder / days / annis) ==========
+
+    async def analyze_owner_intent(self, text: str) -> Dict[str, Any]:
+        """
+        分析 Owner 发送的自然语言，判断是否需要转成：
+        - todo
+        - reminder
+        - days
+        - annis
+        - none（无动作）
+
+        期望返回结构示例：
+        {
+          "action": "todo" | "reminder" | "days" | "annis" | "none",
+          "title": "字符串标题",
+          "note": "补充说明",
+          "datetime": "ISO8601 字符串或 null",
+          "tags": ["#todo"]
+        }
+        """
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        system_prompt = (
+            f"You are a meticulous personal secretary. Current time: {now_str}.\n"
+            "Analyze the user's Chinese message and decide whether it should become a task.\n"
+            "Categories:\n"
+            "- 'todo': General task (no precise time required or just a rough date).\n"
+            "- 'reminder': One-off alert at a specific time.\n"
+            "- 'days': Special day / countdown type event.\n"
+            "- 'annis': Recurring anniversary (yearly meaningful date).\n"
+            "- 'none': Casual chat or irrelevant, do NOT create anything.\n\n"
+            "When you DO create something, extract:\n"
+            "- title: short, suitable as task title.\n"
+            "- note: optional extra note or details.\n"
+            "- datetime: ISO8601 string if there is a clear execution/alert time, otherwise null.\n"
+            "- tags: 1-3 short tags like '#todo', '#reminder', '#study'.\n\n"
+            "Output strict JSON:\n"
+            "{\n"
+            "  \"action\": \"todo\"|\"reminder\"|\"days\"|\"annis\"|\"none\",\n"
+            "  \"title\": \"...\",\n"
+            "  \"note\": \"...\",\n"
+            "  \"datetime\": \"YYYY-MM-DDTHH:MM\" or null,\n"
+            "  \"tags\": [\"...\"]\n"
+            "}"
+        )
+
+        result = await self._call_gpt(system_prompt, text)
+
+        if not result or "error" in result:
+            # 出错或模型没返回有效结构时，默认不做处理
+            log.error(f"❌ AI owner-intent analysis failed: {result}")
+            return {"action": "none"}
+
+        # 最起码保证 action 字段存在
+        action = result.get("action") or "none"
+        title = result.get("title") or ""
+        note = result.get("note") or ""
+        dt = result.get("datetime", None)
+        tags = result.get("tags") or []
+        if not isinstance(tags, list):
+            tags = [str(tags)]
+
+        return {
+            "action": action,
+            "title": title,
+            "note": note,
+            "datetime": dt,
+            "tags": tags,
+        }
+
+    # ========== Greeting Generation ==========
+
+    async def generate_greeting(self, event_name: str) -> str:
+        """
+        为节日 / 纪念日生成一条简短、文艺的中文问候语。
+        返回纯文本字符串。
+        """
+        system_prompt = (
+            "你是一个文艺但不过分矫情的中文文案助手。\n"
+            "为指定的节日或纪念日生成一条适合作为 Telegram 早安通知的问候语：\n"
+            "- 风格温暖、简洁、有一点美感。\n"
+            "- 不要太长，控制在一两句话之内。\n"
+            "- 不要使用表情符号以外的复杂格式。\n"
+            "输出 JSON：{\"text\": \"...\"}"
+        )
+
+        result = await self._call_gpt(system_prompt, event_name)
+
+        if not result or "error" in result:
+            log.error(f"❌ AI greeting generation failed: {result}")
+            return f"祝你 {event_name} 快乐。"
+
+        text = result.get("text") or ""
+        if not text.strip():
+            return f"祝你 {event_name} 快乐。"
+        return text.strip()
 
 
 agent = AIAgent()

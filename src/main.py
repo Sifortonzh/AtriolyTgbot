@@ -11,16 +11,16 @@ from src.bot.handlers import (
 from src.bot.commands import (
     cmd_start, cmd_help, cmd_membership_sharing,
     cmd_blacklist, cmd_whitelist, cmd_ai_test,
-    cmd_mode, cmd_ping,
+    cmd_mode, cmd_ping, cmd_status
 )
+from src.services.scheduler import scheduler_service  # NEW: Import scheduler_service
 
-# 如果 settings 里有 LOG_LEVEL 就用它，否则回退到 INFO
+# 设置日志级别，默认INFO
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=getattr(settings, "LOG_LEVEL", logging.INFO),
 )
 log = logging.getLogger(__name__)
-
 
 def main():
     if not settings.TELEGRAM_BOT_TOKEN:
@@ -37,6 +37,7 @@ def main():
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("mode", cmd_mode))
     app.add_handler(CommandHandler("ping", cmd_ping))
+    app.add_handler(CommandHandler("status", cmd_status))  # NEW: Add /status command
     app.add_handler(CommandHandler("membership_sharing", cmd_membership_sharing))
     app.add_handler(CommandHandler("blacklist", cmd_blacklist))
     app.add_handler(CommandHandler("whitelist", cmd_whitelist))
@@ -70,9 +71,11 @@ def main():
         )
     )
 
-    log.info("🟢 Atrioly · Wanatring Agent Online (v2.0 Private Support).")
-    app.run_polling()
+    # START SCHEDULER (Pass 'app' so it can send messages)
+    scheduler_service.start(app)  # Start the scheduler service
 
+    log.info("🟢 Atrioly · Wanatring Agent Online (v3.0 with Scheduler).")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
