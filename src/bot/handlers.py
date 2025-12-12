@@ -1,4 +1,5 @@
 import logging
+import os
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ApplicationHandlerStop
@@ -12,6 +13,19 @@ from src.services.task_manager import task_manager  # NEW
 
 # Setup Logger
 log = logging.getLogger(__name__)
+
+def _fmt_tags_hash(tags) -> str:
+    """将标签列表/字符串统一转为 '#tag' 形式。"""
+    if not tags:
+        return "—"
+    # 允许字符串或列表两种输入
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    return " ".join(
+        f"#{t.strip().replace(' ', '_')}"  # 空格换成下划线，避免分裂标签
+        for t in tags
+        if isinstance(t, str) and t.strip()
+    )
 
 
 async def gatekeeper_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,51 +154,132 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     if safety_filter.is_obvious_spam(text):
         return
 
+    mode = state_manager.get_mode(user.id)
+
     # --- 1. Owner Secretary Mode ---
     if user.id in settings.OWNER_IDS:
-        intent = await agent.analyze_owner_intent(text)
-        action = intent.get("action", "none")
+        log.info(f"Owner private message in mode: {mode}")
 
-        if action != "none":
-            # 写入任务系统
+        # CHAT mode for owner: pure AI chat, no task parsing
+        if mode == "chat":
             try:
-                task_manager.add_entry(action, intent)
+                reply_text = await agent.chat_reply(text)
             except Exception as e:
-                log.error(f"❌ task_manager.add_entry failed: {e}")
-                await msg.reply_text(f"⚠️ 创建 {action} 时出错：{e}")
+                log.error(f"❌ chat_reply failed for owner {user.id}: {e}")
+                reply_text = "⚠️ AI 聊天暂时不可用，请稍后再试。"
+            await msg.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
+            return
+        else:
+            intent = await agent.analyze_owner_intent(text)
+            action = intent.get("action", "none")
+
+            if action != "none":
+                # 写入任务系统（创建 todo/reminder/days/annis）
+                try:
+                    task_manager.add_entry(action, intent)
+                except Exception as e:
+                    log.error(f"❌ task_manager.add_entry failed: {e}")
+                    await msg.reply_text(f"⚠️ 创建 {action} 时出错：{e}")
+                    return
+
+                raw_tags = intent.get("tags", [])
+                tags_str = _fmt_tags_hash(raw_tags)
+
+                reply = (
+                    f"✅ **Created {action.upper()}**\n"
+                    f"📌 {intent.get('title') or 'No title'}\n"
+                    f"🕒 {intent.get('datetime') or 'N/A'}\n"
+                    f"🏷 {tags_str}"
+                )
+                await msg.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
                 return
 
-            tags = " ".join(intent.get("tags", [])) or "—"
-            reply = (
-                f"✅ **Created {action.upper()}**\n"
-                f"📌 {intent.get('title') or 'No title'}\n"
-                f"🕒 {intent.get('datetime') or 'N/A'}\n"
-                f"🏷 {tags}"
+            # action == 'none'：进入“任务管理模式”（更新 / 删除 / 列出）
+            try:
+                todos = task_manager.get_entries("todo")
+                reminders = task_manager.get_entries("reminder")
+                days = task_manager.get_entries("days")
+                annis = task_manager.get_entries("annis")
+            except Exception as e:
+                log.error(f"❌ Failed to load task lists for manage_tasks_from_chat: {e}")
+                await msg.reply_text("⚠️ 读取任务列表失败，暂时无法进行管理操作。")
+                return
+
+            manage_res = await agent.manage_tasks_from_chat(
+                text,
+                todos=todos,
+                reminders=reminders,
+                days=days,
+                annis=annis,
             )
-            await msg.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+
+            if not manage_res.get("ok"):
+                # AI 未能可靠解析当前指令
+                log.warning(f"manage_tasks_from_chat returned not ok: {manage_res}")
+                await msg.reply_text("🤖 没有完全理解这条任务管理指令，未对现有任务做修改。")
+                return
+
+            ops = manage_res.get("operations", [])
+            for op in ops:
+                op_type = op.get("op")
+                target = op.get("target")
+                if target not in ("todo", "reminder", "days", "annis"):
+                    continue
+
+                if op_type == "create":
+                    data = op.get("data") or {}
+                    try:
+                        task_manager.add_entry(target, data)
+                    except Exception as e:
+                        log.error(f"❌ add_entry failed in manage_tasks_from_chat: {e}")
+                elif op_type == "update":
+                    entry_id = op.get("id")
+                    data = op.get("data") or {}
+                    if entry_id is not None:
+                        try:
+                            task_manager.update_entry(target, entry_id, data)
+                        except Exception as e:
+                            log.error(f"❌ update_entry failed in manage_tasks_from_chat: {e}")
+                elif op_type == "delete":
+                    entry_id = op.get("id")
+                    if entry_id is not None:
+                        try:
+                            task_manager.delete_entry(target, entry_id)
+                        except Exception as e:
+                            log.error(f"❌ delete_entry failed in manage_tasks_from_chat: {e}")
+                else:
+                    # 'list' 或其他无状态操作，不需要直接改数据库
+                    continue
+
+            reply_text = manage_res.get("reply_text") or "已根据你的指令更新任务。"
+            await msg.reply_text(f"🤖 {reply_text}")
             return
 
-        # action == 'none'：视为无关闲聊，不再走后面的“转发给自己当管理员”的逻辑
-        log.info(f"Owner message classified as 'none', ignoring. Text='{text[:50]}...'")
+    # --- 2. 普通用户：根据 mode 切换 Chat / Forward ---
+
+    log.info(f"Private message mode for user {user.id}: {mode}")
+
+    # 2.1 Chat 模式：直接用 AI 回复用户，不再转发给管理员
+    if mode == "chat":
+        try:
+            reply_text = await agent.chat_reply(text)
+        except Exception as e:
+            log.error(f"❌ chat_reply failed for user {user.id}: {e}")
+            reply_text = "⚠️ AI 聊天暂时不可用，请稍后再试。"
+        await msg.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # --- 2. 普通用户：AI 分类 + 转发给管理员 ---
-
-    # 2.1 AI 分类（服务台）
+    # 2.2 Forward 模式（默认）：先做 AI 分类，再转发给管理员
     analysis = await agent.analyze_private_message(text)
 
-    # 2.2 Spam Enforcement
+    # Spam Enforcement
     if analysis.get("is_spam"):
         status = blacklist.add_strike(user.id)
         if status == "banned":
             await msg.reply_text("🚫 You have been banned for spam.")
         return
 
-    # 2.3 Mode（目前仍然主要用于将来扩展）
-    mode = state_manager.get_mode(user.id)
-    log.info(f"Private message mode for user {user.id}: {mode}")
-
-    # 2.4 构造转发头信息
+    # 构造转发头信息
     tags = " ".join([f"#{t}" for t in analysis.get("tags", [])])
     category = analysis.get("category", "general").upper()
     summary = analysis.get("summary", "No summary")

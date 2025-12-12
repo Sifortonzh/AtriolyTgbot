@@ -25,6 +25,7 @@ from src.bot.commands import (
     cmd_mode,
     cmd_ping,
     cmd_status,
+    cmd_listall,  # NEW
 )
 from src.services.scheduler import scheduler_service  # 调度服务（建议使用 BackgroundScheduler）
 
@@ -58,6 +59,7 @@ def main() -> None:
     application.add_handler(CommandHandler("blacklist", cmd_blacklist))
     application.add_handler(CommandHandler("whitelist", cmd_whitelist))
     application.add_handler(CommandHandler("ai_test", cmd_ai_test))
+    application.add_handler(CommandHandler("listall", cmd_listall))  # NEW
 
     # 4. Message Logic
 
@@ -72,7 +74,7 @@ def main() -> None:
     # B. 普通私聊消息（用户 → Bot），走 AI 分类 + 转发 / Owner Secretary 模式
     application.add_handler(
         MessageHandler(
-            filters.ChatType.PRIVATE & filters.TEXT,
+            filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO),
             handle_private_message,
         )
     )
@@ -88,7 +90,7 @@ def main() -> None:
     # 5. 启动调度器（注意：scheduler_service 内部请使用 BackgroundScheduler）
     scheduler_service.start(application)
 
-    log.info("🟢 Atrioly · Wanatring Agent v3.0 Online (with scheduler).")
+    log.info("🟢 Atrioly · Wanatring Agent v3.0.2 Online (with scheduler).")
 
     # 6. 阻塞运行，PTB 自己创建/管理 asyncio 事件循环
     application.run_polling()
