@@ -1,12 +1,22 @@
-version: '3.8'
+version: "3.8"
+
 services:
   atrioly-bot:
     container_name: atrioly_wanatring
-    build: .
-    restart: always
-    env_file: .env
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
     volumes:
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport importlib.util, pathlib, sys\nroot = pathlib.Path('/app')\nchecks = [root / 'src' / 'main.py', root / 'src' / 'config.py']\nmissing = [str(p) for p in checks if not p.exists()]\nif missing:\n    print('Missing:', missing)\n    sys.exit(1)\nprint('ok')\nPY"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
