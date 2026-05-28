@@ -142,6 +142,36 @@ class Settings(BaseSettings):
         allowed = {"openai", "deepseek", "anthropic", "openai_compatible"}
         return provider if provider in allowed else "openai"
 
+    @field_validator("DEFAULT_MODEL", mode="before")
+    @classmethod
+    def normalize_default_model(cls, value: Any) -> str:
+        model = str(value or "gpt-4o-mini").strip()
+        return model or "gpt-4o-mini"
+
+    @field_validator("VISION_MODEL", mode="before")
+    @classmethod
+    def normalize_vision_model(cls, value: Any) -> str:
+        model = str(value or "gpt-4o").strip()
+        return model or "gpt-4o"
+
+    @field_validator("DEEPSEEK_BASE_URL", mode="before")
+    @classmethod
+    def normalize_deepseek_base_url(cls, value: Any) -> str:
+        base_url = str(value or "https://api.deepseek.com/v1").strip().rstrip("/")
+        return base_url or "https://api.deepseek.com/v1"
+
+    @field_validator("DEEPSEEK_MODEL", mode="before")
+    @classmethod
+    def normalize_deepseek_model(cls, value: Any) -> str:
+        model = str(value or "deepseek-chat").strip()
+        return model or "deepseek-chat"
+
+    @field_validator("ANTHROPIC_MODEL", mode="before")
+    @classmethod
+    def normalize_anthropic_model(cls, value: Any) -> str:
+        model = str(value or "claude-3-5-haiku-latest").strip()
+        return model or "claude-3-5-haiku-latest"
+
     @field_validator("MAX_MESSAGE_LENGTH")
     @classmethod
     def validate_max_message_length(cls, value: int) -> int:
@@ -263,14 +293,53 @@ class Settings(BaseSettings):
             return self.effective_vision_model
         return self.effective_default_model
 
+    def get_api_key_for_provider(self, provider: str | None = None) -> str | None:
+        provider_name = (provider or self.AI_PROVIDER or "openai").strip().lower().replace("-", "_")
+        if provider_name == "deepseek":
+            return self.effective_deepseek_key
+        if provider_name == "anthropic":
+            return self.effective_anthropic_key
+        if provider_name == "openai_compatible":
+            return self.effective_openai_compatible_key
+        return self.effective_openai_key
+
+    def get_base_url_for_provider(self, provider: str | None = None) -> str | None:
+        provider_name = (provider or self.AI_PROVIDER or "openai").strip().lower().replace("-", "_")
+        if provider_name == "deepseek":
+            return self.DEEPSEEK_BASE_URL
+        if provider_name == "openai_compatible":
+            return self.OPENAI_COMPATIBLE_BASE_URL
+        if provider_name == "openai":
+            return self.OPENAI_BASE_URL or self.AI_BASE_URL
+        return None
+
     def active_ai_key_configured(self) -> bool:
-        if self.AI_PROVIDER == "deepseek":
-            return bool(self.effective_deepseek_key)
-        if self.AI_PROVIDER == "anthropic":
-            return bool(self.effective_anthropic_key)
-        if self.AI_PROVIDER == "openai_compatible":
-            return bool(self.effective_openai_compatible_key)
-        return bool(self.effective_openai_key)
+        return bool(self.get_api_key_for_provider())
+
+    def active_ai_provider_ready(self) -> bool:
+        if not self.active_ai_key_configured():
+            return False
+        if self.AI_PROVIDER == "openai_compatible" and not self.OPENAI_COMPATIBLE_BASE_URL:
+            return False
+        return True
+
+    def public_ai_summary(self) -> dict[str, Any]:
+        return {
+            "provider": self.AI_PROVIDER,
+            "model": self.effective_default_model,
+            "radar_model": self.get_model_for_task("radar"),
+            "private_model": self.get_model_for_task("private"),
+            "task_model": self.get_model_for_task("task"),
+            "chat_model": self.get_model_for_task("chat"),
+            "vision_model": self.get_model_for_task("vision"),
+            "base_url_configured": bool(self.get_base_url_for_provider()),
+            "api_key_configured": self.active_ai_key_configured(),
+            "provider_ready": self.active_ai_provider_ready(),
+            "timeout_seconds": self.AI_REQUEST_TIMEOUT_SECONDS,
+            "retry_times": self.AI_RETRY_TIMES,
+            "temperature": self.AI_TEMPERATURE,
+            "cache_ttl_seconds": self.AI_CACHE_TTL_SECONDS,
+        }
 
     def is_owner(self, user_id: int | None) -> bool:
         return user_id is not None and user_id in self.OWNER_IDS
@@ -288,6 +357,7 @@ class Settings(BaseSettings):
         This intentionally excludes Bot Token and API Keys.
         """
         return {
+            "ai": self.public_ai_summary(),
             "provider": self.AI_PROVIDER,
             "model": self.effective_default_model,
             "radar_model": self.get_model_for_task("radar"),
@@ -296,6 +366,7 @@ class Settings(BaseSettings):
             "chat_model": self.get_model_for_task("chat"),
             "vision_model": self.get_model_for_task("vision"),
             "active_ai_key_configured": self.active_ai_key_configured(),
+            "active_ai_provider_ready": self.active_ai_provider_ready(),
             "log_level": self.LOG_LEVEL,
             "data_dir": self.DATA_DIR,
             "owners": len(self.OWNER_IDS),

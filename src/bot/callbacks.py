@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import datetime
+import logging
+from typing import Any
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes
+
+from src.config import settings
+from src.services.membership import manager
+from src.services.state_manager import state_manager
+from src.services.task_manager import task_manager
+
+log = logging.getLogger(__name__)
+
+
+def current_user_id(update: Update) -> int | None:
+    return update.effective_user.id if update.effective_user else None
+
+
+def is_owner(update: Update) -> bool:
+    return settings.is_owner(current_user_id(update))
+
+
+def format_bool(value: bool) -> str:
+    return "ON" if value else "OFF"
+
+
+def get_task_count(entry_type: str) -> int:
+    try:
+        return len(task_manager.get_entries(entry_type))
+    except Exception as error:  # noqa: BLE001
+        log.warning("Failed to read task count for %s: %s", entry_type, error)
+        return 0
+
+
+def build_home_keyboard(is_owner_user: bool) -> InlineKeyboardMarkup:
+    keyboard: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton("📊 Status", callback_data="menu:status"),
+            InlineKeyboardButton("🧠 AI Radar", callback_data="menu:probe"),
+        ],
+        [
+            InlineKeyboardButton("🎬 Membership", callback_data="menu:membership"),
+            InlineKeyboardButton("🗂 Tasks", callback_data="menu:listall"),
+        ],
+        [
+            InlineKeyboardButton("🔁 Mode", callback_data="menu:mode"),
+            InlineKeyboardButton("📖 Help", callback_data="menu:help"),
+        ],
+    ]
+    if is_owner_user:
+        keyboard.append([InlineKeyboardButton("🛡 Owner Tools", callback_data="menu:owner")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def build_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="menu:home")]])
+
+
+def build_mode_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("🤖 Chat Mode", callback_data="menu:mode:chat"),
+                InlineKeyboardButton("📨 Forward Mode", callback_data="menu:mode:forward"),
+            ],
+            [InlineKeyboardButton("⬅️ Back", callback_data="menu:home")],
+        ]
+    )
+
+
+def render_home_text(update: Update) -> str:
+    user_id = current_user_id(update)
+    mode = state_manager.get_mode(user_id) if user_id is not None else "chat"
+    summary = settings.public_runtime_summary()
+    provider = summary.get("openai_provider") or summary.get("model_provider") or "N/A"
+
+    return (
+        "🪐 *Atrioly · Wanatring Console*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"Current Mode: `{mode.upper()}`\n"
+        f"AI Provider: `{provider}`\n"
+        "\n"
+        "Intelligent routing, AI radar, membership tracking, and task console."
+    )
+
+
+def render_status_text(update: Update) -> str:
+    user_id = current_user_id(update)
+    mode = state_manager.get_mode(user_id) if user_id is not None else "chat"
+
+    todos = get_task_count("todo")
+    reminders = get_task_count("reminder")
+    days = get_task_count("days")
+    annis = get_task_count("annis")
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    summary = settings.public_runtime_summary()
+
+    return (
+        "🟢 *Atrioly System Status*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 Model: `{settings.DEFAULT_MODEL}`\n"
+        f"📡 Mode: `{mode.upper()}`\n"
+        f"🧭 Timezone: `{settings.DEFAULT_TIMEZONE}`\n"
+        f"📅 Date: `{now_str}`\n"
+        "\n"
+        "*Feature Flags*\n"
+        f"• AI Filter: `{format_bool(settings.ENABLE_AI_FILTER)}`\n"
+        f"• Heuristic Filter: `{format_bool(settings.ENABLE_HEURISTIC_FILTER)}`\n"
+        f"• Auto Ban: `{format_bool(settings.ENABLE_AUTO_BAN)}`\n"
+        "\n"
+        "*Task Stats*\n"
+        f"• Todos: `{todos}`\n"
+        f"• Pending Reminders: `{reminders}`\n"
+        f"• Special Days: `{days}`\n"
+        f"• Anniversaries: `{annis}`\n"
+        "\n"
+        "*Runtime*\n"
+        f"• Owners: `{summary['owners']}`\n"
+        f"• Forward Targets: `{summary['forward_targets']}`"
+    )
+
+
+def render_help_text(owner: bool) -> str:
+    owner_hint = "\n\n🔐 *Owner Console*\n" if owner else ""
+    owner_commands = (
+        "`/probe <text>` - Analyze text with the AI filter\n"
+        "`/ai_test <text>` - Legacy alias for /probe\n"
+        "`/blacklist <uid>` - Ban a user\n"
+        "`/whitelist <uid>` - Unban a user\n"
+        "`/listall` - List all stored tasks\n"
+    )
+
+    return (
+        "📚 *Atrioly Command List*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "`/start` - Open console menu\n"
+        "`/help` - Show this manual\n"
+        "`/status` - System health & task stats\n"
+        "`/ping` - Check bot responsiveness\n"
+        "`/mode [chat|forward]` - Switch AI/Human routing\n"
+        "`/membership_sharing` - View tracked memberships\n"
+        f"{owner_hint}{owner_commands if owner else ''}"
+    )
+
+
+def render_probe_text() -> str:
+    return (
+        "🧠 *AI Probe*\n"
+        "Send `/probe <text>` to test the AI radar.\n\n"
+        "Examples:\n"
+        "`/probe Netflix 车位还有一个，25元一个月`\n"
+        "`/probe USDT 投资稳赚，点击链接进群`"
+    )
+
+
+def render_membership_text() -> str:
+    try:
+        subs = manager.get_active()
+    except Exception as error:  # noqa: BLE001
+        log.error("Failed to load memberships: %s", error, exc_info=error)
+        return "⚠️ Failed to load membership records."
+
+    if not subs:
+        return "📡 *Membership Radar*\n\nNo active membership records."
+
+    lines = ["📡 *Membership Radar*", ""]
+    for item in subs:
+        platform = item.get("platform", "Unknown")
+        expiry = item.get("expiry", "N/A")
+        status = item.get("status", "active")
+        lines.append(f"- *{platform}* | Exp: `{expiry}` | Status: `{status}`")
+
+    return "\n".join(lines)
+
+
+def render_tasks_summary_text() -> str:
+    todos = get_task_count("todo")
+    reminders = get_task_count("reminder")
+    days = get_task_count("days")
+    annis = get_task_count("annis")
+    return (
+        "🗂 *Task Console Summary*\n"
+        f"• Todos: `{todos}`\n"
+        f"• Reminders: `{reminders}`\n"
+        f"• Days: `{days}`\n"
+        f"• Anniversaries: `{annis}`\n\n"
+        "Use `/listall` to view full details."
+    )
+
+
+def render_owner_tools_text() -> str:
+    return (
+        "🛡 *Owner Tools*\n"
+        "`/probe <text>`\n"
+        "`/blacklist <uid>`\n"
+        "`/whitelist <uid>`\n"
+        "`/listall`"
+    )
+
+
+async def _safe_edit(
+    query: Any,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+    parse_mode: str | None = ParseMode.MARKDOWN,
+) -> None:
+    try:
+        await query.edit_message_text(text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception as error:  # noqa: BLE001
+        log.warning("Menu edit failed with parse_mode=%s, retrying plain text: %s", parse_mode, error)
+        await query.edit_message_text(text=text, parse_mode=None, reply_markup=reply_markup)
+
+
+async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+
+    await query.answer()
+    data = query.data or ""
+    owner = is_owner(update)
+    user_id = current_user_id(update)
+
+    if data == "menu:home":
+        await _safe_edit(query, render_home_text(update), build_home_keyboard(owner))
+        return
+
+    if data == "menu:status":
+        await _safe_edit(query, render_status_text(update), build_back_keyboard())
+        return
+
+    if data == "menu:help":
+        await _safe_edit(query, render_help_text(owner), build_back_keyboard())
+        return
+
+    if data == "menu:probe":
+        await _safe_edit(query, render_probe_text(), build_back_keyboard())
+        return
+
+    if data == "menu:membership":
+        await _safe_edit(query, render_membership_text(), build_back_keyboard())
+        return
+
+    if data == "menu:listall":
+        if not owner:
+            await _safe_edit(query, "⛔ Permission denied. Owner tools only.", build_back_keyboard(), parse_mode=None)
+            return
+        await _safe_edit(query, render_tasks_summary_text(), build_back_keyboard())
+        return
+
+    if data == "menu:mode":
+        await _safe_edit(query, render_mode_text(update), build_mode_keyboard())
+        return
+
+    if data == "menu:mode:chat":
+        if user_id is not None:
+            state_manager.set_mode(user_id, "chat")
+        await _safe_edit(query, render_mode_text(update), build_mode_keyboard())
+        return
+
+    if data == "menu:mode:forward":
+        if user_id is not None:
+            state_manager.set_mode(user_id, "forward")
+        await _safe_edit(query, render_mode_text(update), build_mode_keyboard())
+        return
+
+    if data == "menu:owner":
+        if not owner:
+            await _safe_edit(query, "⛔ Permission denied. Owner tools only.", build_back_keyboard(), parse_mode=None)
+            return
+        await _safe_edit(query, render_owner_tools_text(), build_back_keyboard())
+        return
+
+
+def render_mode_text(update: Update) -> str:
+    user_id = current_user_id(update)
+    mode = state_manager.get_mode(user_id) if user_id is not None else "chat"
+    return (
+        "🔁 *Mode Switch*\n"
+        f"Current mode: `{mode.upper()}`\n\n"
+        "Choose your routing mode:"
+    )

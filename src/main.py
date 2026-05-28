@@ -10,12 +10,15 @@ from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
     TypeHandler,
     filters,
 )
+
+from src.bot.callbacks import handle_menu_callback
 
 from src.bot.commands import (
     cmd_ai_test,
@@ -154,6 +157,8 @@ def register_commands(application: Application[Any, Any, Any, Any, Any, Any]) ->
 
     for command, handler in command_handlers.items():
         application.add_handler(CommandHandler(command, handler))
+
+    application.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^menu:"))
 
 
 def register_message_handlers(application: Application[Any, Any, Any, Any, Any, Any]) -> None:

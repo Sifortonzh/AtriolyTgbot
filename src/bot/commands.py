@@ -10,6 +10,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
+from src.bot.callbacks import build_home_keyboard, render_home_text
 from src.config import settings
 from src.services.ai_agent import agent
 from src.services.blacklist_manager import blacklist
@@ -104,16 +105,10 @@ def split_long_message(lines: Iterable[str], limit: int = 3500) -> list[str]:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = current_user_id(update)
-    mode = state_manager.get_mode(user_id) if user_id is not None else "chat"
-
     await safe_reply(
         update,
-        (
-            "💠 **Atrioly · Wanatring Online**\n"
-            f"Current Mode: `{mode.upper()}`\n"
-            "Use /help to see available tools."
-        ),
+        render_home_text(update),
+        reply_markup=build_home_keyboard(is_owner(update)),
     )
 
 
