@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ApplicationHandlerStop
@@ -13,6 +14,21 @@ from src.services.task_manager import task_manager  # NEW
 
 # Setup Logger
 log = logging.getLogger(__name__)
+
+
+def _escape_markdown_text(text: str) -> str:
+    """Escape Telegram Markdown (v1) special chars for link labels."""
+    value = str(text or "")
+    return re.sub(r"([_\*\[\]\(\)`])", r"\\\1", value)
+
+
+def _build_sender_profile_lines(user) -> str:
+    if not settings.ENABLE_SENDER_PROFILE_LINK or not user:
+        return ""
+
+    profile_url = f"https://t.me/{user.username}" if user.username else f"tg://user?id={user.id}"
+    display_name = _escape_markdown_text(user.full_name or "Unknown")
+    return f"👤 Sender: [{display_name}]({profile_url})\n🆔 User ID: {user.id}\n"
 
 def _fmt_tags_hash(tags) -> str:
     """将标签列表/字符串统一转为 '#tag' 形式。"""
@@ -117,6 +133,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             f"💠 **Verified Opportunity**\n"
             f"🎬 **Service**: {platform}\n"
             f"📊 **Details**: {summary}\n"
+            f"{_build_sender_profile_lines(user)}"
             f"🔗 [Original Message]({msg.link})"
         )
 
@@ -286,7 +303,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 
     header = (
         f"📨 **Private Message** [{category}]\n"
-        f"👤 **From**: {user.full_name} (`{user.id}`)\n"
+        f"{_build_sender_profile_lines(user) if settings.ENABLE_SENDER_PROFILE_LINK else f'👤 **From**: {user.full_name} (`{user.id}`)\\n'}"
         f"🏷 **Tags**: {tags or '—'}\n"
         f"📝 **Summary**: {summary}\n"
         f"-----------------------------"
