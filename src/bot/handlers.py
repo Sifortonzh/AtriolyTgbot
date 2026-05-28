@@ -301,9 +301,13 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     category = analysis.get("category", "general").upper()
     summary = analysis.get("summary", "No summary")
 
+    sender_info = _build_sender_profile_lines(user)
+    if not sender_info:
+        sender_info = f"👤 **From**: {_escape_markdown_text(user.full_name)} (`{user.id}`)\n"
+
     header = (
         f"📨 **Private Message** [{category}]\n"
-        f"{_build_sender_profile_lines(user) if settings.ENABLE_SENDER_PROFILE_LINK else f'👤 **From**: {user.full_name} (`{user.id}`)\\n'}"
+        f"{sender_info}"
         f"🏷 **Tags**: {tags or '—'}\n"
         f"📝 **Summary**: {summary}\n"
         f"-----------------------------"
