@@ -9,6 +9,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from src.config import settings
+from src.services import ai_runtime
 from src.services.membership import manager
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager
@@ -53,6 +54,7 @@ def build_home_keyboard(is_owner_user: bool) -> InlineKeyboardMarkup:
     ]
     if is_owner_user:
         keyboard.append([InlineKeyboardButton("🛡 Owner Tools", callback_data="menu:owner")])
+        keyboard.append([InlineKeyboardButton("⚙️ AI Provider", callback_data="menu:ai_provider")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -76,13 +78,19 @@ def render_home_text(update: Update) -> str:
     user_id = current_user_id(update)
     mode = state_manager.get_mode(user_id) if user_id is not None else "chat"
     summary = settings.public_runtime_summary()
-    provider = summary.get("openai_provider") or summary.get("model_provider") or "N/A"
+    ai = summary.get("ai", {})
+    provider = ai.get("provider") or summary.get("provider") or "N/A"
+    model = ai.get("model") or summary.get("model") or "N/A"
+    ready = ai.get("provider_ready")
+    if ready is None:
+        ready = summary.get("active_ai_provider_ready")
+    ready_icon = "✅" if ready else "⚠️"
 
     return (
         "🪐 *Atrioly · Wanatring Console*\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"Current Mode: `{mode.upper()}`\n"
-        f"AI Provider: `{provider}`\n"
+        f"AI Provider: `{provider} · {model} {ready_icon}`\n"
         "\n"
         "Intelligent routing, AI radar, membership tracking, and task console."
     )
@@ -203,6 +211,58 @@ def render_owner_tools_text() -> str:
     )
 
 
+def build_ai_provider_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(f"OpenAI · {settings.DEFAULT_MODEL}", callback_data="menu:ai_provider:openai")],
+            [InlineKeyboardButton(f"DeepSeek · {settings.DEEPSEEK_MODEL}", callback_data="menu:ai_provider:deepseek")],
+            [InlineKeyboardButton(f"Claude · {settings.ANTHROPIC_MODEL}", callback_data="menu:ai_provider:anthropic")],
+            [InlineKeyboardButton("OpenAI Compatible", callback_data="menu:ai_provider:openai_compatible")],
+            [InlineKeyboardButton("Clear Runtime Override", callback_data="menu:ai_provider:clear")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="menu:home")],
+        ]
+    )
+
+
+def _provider_model_default(provider: str) -> str:
+    if provider == "deepseek":
+        return settings.DEEPSEEK_MODEL
+    if provider == "anthropic":
+        return settings.ANTHROPIC_MODEL
+    if provider == "openai_compatible":
+        return settings.OPENAI_COMPATIBLE_MODEL or settings.DEFAULT_MODEL
+    return settings.DEFAULT_MODEL
+
+
+def render_ai_provider_text() -> str:
+    info = ai_runtime.summary()
+    runtime = info.get("runtime") or {}
+    runtime_provider = runtime.get("provider") or info.get("provider") or "N/A"
+    runtime_model = runtime.get("model") or info.get("model") or "N/A"
+    override_active = bool(info.get("runtime_override_active"))
+    default_provider = info.get("default_provider") or settings.AI_PROVIDER
+    provider_ready = bool(info.get("provider_ready"))
+    key_ready = bool(info.get("api_key_configured"))
+    ready_icon = "✅" if provider_ready else "⚠️"
+
+    warning = ""
+    if not key_ready:
+        warning = "\n\n⚠️ Selected provider API key is not configured."
+    elif runtime_provider == "openai_compatible" and not settings.OPENAI_COMPATIBLE_BASE_URL:
+        warning = "\n\n⚠️ OPENAI_COMPATIBLE_BASE_URL is missing."
+
+    return (
+        "⚙️ *AI Provider Runtime Switcher*\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"Runtime Provider: `{runtime_provider}`\n"
+        f"Runtime Model: `{runtime_model}`\n"
+        f"Runtime Override: `{'ACTIVE' if override_active else 'INACTIVE'}`\n"
+        f"Default (.env) Provider: `{default_provider}`\n"
+        f"Provider Readiness: `{ready_icon}`"
+        f"{warning}"
+    )
+
+
 async def _safe_edit(
     query: Any,
     text: str,
@@ -274,6 +334,33 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await _safe_edit(query, "⛔ Permission denied. Owner tools only.", build_back_keyboard(), parse_mode=None)
             return
         await _safe_edit(query, render_owner_tools_text(), build_back_keyboard())
+        return
+
+    if data == "menu:ai_provider":
+        if not owner:
+            await _safe_edit(query, "⛔ Permission denied. Owner tools only.", build_back_keyboard(), parse_mode=None)
+            return
+        await _safe_edit(query, render_ai_provider_text(), build_ai_provider_keyboard())
+        return
+
+    if data in {
+        "menu:ai_provider:openai",
+        "menu:ai_provider:deepseek",
+        "menu:ai_provider:anthropic",
+        "menu:ai_provider:openai_compatible",
+        "menu:ai_provider:clear",
+    }:
+        if not owner:
+            await _safe_edit(query, "⛔ Permission denied. Owner tools only.", build_back_keyboard(), parse_mode=None)
+            return
+
+        if data == "menu:ai_provider:clear":
+            ai_runtime.clear()
+        else:
+            provider = data.split(":")[-1]
+            ai_runtime.set_provider(provider, _provider_model_default(provider))
+
+        await _safe_edit(query, render_ai_provider_text(), build_ai_provider_keyboard())
         return
 
 

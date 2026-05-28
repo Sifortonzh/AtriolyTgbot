@@ -14,6 +14,7 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 from src.config import settings
+from src.services import ai_runtime
 
 log = logging.getLogger(__name__)
 
@@ -93,15 +94,19 @@ class AIAgent:
     )
 
     def __init__(self) -> None:
-        self._provider = (settings.AI_PROVIDER or "openai").strip().lower().replace("-", "_")
         self._cache: dict[str, tuple[float, Any]] = {}
-        self._openai_like_client: OpenAI | None = self._build_openai_like_client()
-        self._anthropic_client: Anthropic | None = self._build_anthropic_client()
+        self._openai_like_clients: dict[str, OpenAI] = {}
+        self._anthropic_clients: dict[str, Anthropic] = {}
 
     # ========== Common Helper ==========
 
-    def _build_openai_like_client(self) -> OpenAI | None:
-        provider = self._provider
+    @staticmethod
+    def _normalize_provider(provider: str | None) -> str:
+        value = str(provider or "openai").strip().lower().replace("-", "_")
+        return value if value in {"openai", "deepseek", "anthropic", "openai_compatible"} else "openai"
+
+    def _build_openai_like_client(self, provider: str) -> OpenAI | None:
+        provider = self._normalize_provider(provider)
 
         if provider == "openai":
             api_key = settings.effective_openai_key
@@ -127,8 +132,9 @@ class AIAgent:
 
         return None
 
-    def _build_anthropic_client(self) -> Anthropic | None:
-        if self._provider != "anthropic":
+    def _build_anthropic_client(self, provider: str) -> Anthropic | None:
+        provider = self._normalize_provider(provider)
+        if provider != "anthropic":
             return None
         api_key = settings.effective_anthropic_key
         if not api_key:
@@ -138,7 +144,38 @@ class AIAgent:
     def _model_for_task(self, task: str, model: str | None = None) -> str:
         if model:
             return model
-        return settings.get_model_for_task(task)
+        return ai_runtime.effective_model_for_task(task)
+
+    def _resolve_provider(self) -> str:
+        return self._normalize_provider(ai_runtime.effective_provider())
+
+    def _get_openai_like_client(self, provider: str) -> OpenAI | None:
+        api_key = settings.get_api_key_for_provider(provider)
+        base_url = settings.get_base_url_for_provider(provider)
+        cache_key = f"{provider}|{api_key or ''}|{base_url or ''}|{settings.AI_REQUEST_TIMEOUT_SECONDS}"
+        client = self._openai_like_clients.get(cache_key)
+        if client:
+            return client
+        built = self._build_openai_like_client(provider)
+        if built:
+            self._openai_like_clients[cache_key] = built
+        return built
+
+    def _get_anthropic_client(self, provider: str) -> Anthropic | None:
+        api_key = settings.get_api_key_for_provider(provider)
+        cache_key = f"{provider}|{api_key or ''}|{settings.AI_REQUEST_TIMEOUT_SECONDS}"
+        client = self._anthropic_clients.get(cache_key)
+        if client:
+            return client
+        built = self._build_anthropic_client(provider)
+        if built:
+            self._anthropic_clients[cache_key] = built
+        return built
+
+    def _has_provider_client(self, provider: str) -> bool:
+        if provider == "anthropic":
+            return self._get_anthropic_client(provider) is not None
+        return self._get_openai_like_client(provider) is not None
 
     def _cache_get(self, cache_key: str) -> Any | None:
         ttl = max(0, settings.AI_CACHE_TTL_SECONDS)
@@ -208,10 +245,11 @@ class AIAgent:
     ) -> Dict[str, Any]:
         """Call current provider and parse JSON."""
         model_name = self._model_for_task(task, model)
+        provider = self._resolve_provider()
         safe_user_text = self._safe_text(user_text)
         cache_key = json.dumps(
             {
-                "provider": self._provider,
+                "provider": provider,
                 "model": model_name,
                 "system": system_prompt,
                 "user": safe_user_text,
@@ -230,10 +268,11 @@ class AIAgent:
 
         for attempt in range(retries + 1):
             try:
-                if self._provider == "anthropic":
-                    if not self._anthropic_client:
+                if provider == "anthropic":
+                    anthropic_client = self._get_anthropic_client(provider)
+                    if not anthropic_client:
                         return {"error": "Anthropic API key not configured"}
-                    response = self._anthropic_client.messages.create(
+                    response = anthropic_client.messages.create(
                         model=model_name,
                         max_tokens=1200,
                         temperature=settings.AI_TEMPERATURE,
@@ -250,9 +289,10 @@ class AIAgent:
                     )
                     result = self._extract_json_object(text_content)
                 else:
-                    if not self._openai_like_client:
+                    openai_client = self._get_openai_like_client(provider)
+                    if not openai_client:
                         return {"error": "AI provider credentials not configured"}
-                    response = self._openai_like_client.chat.completions.create(
+                    response = openai_client.chat.completions.create(
                         model=model_name,
                         messages=[
                             {"role": "system", "content": system_prompt},
@@ -264,7 +304,7 @@ class AIAgent:
                     content = response.choices[0].message.content or ""
                     result = self._extract_json_object(content)
 
-                result.setdefault("_provider", self._provider)
+                result.setdefault("_provider", provider)
                 result.setdefault("_model", model_name)
                 result.setdefault("_cached", False)
                 result.setdefault("_elapsed_ms", int((time.perf_counter() - started) * 1000))
@@ -275,7 +315,7 @@ class AIAgent:
                 if attempt >= retries:
                     return {
                         "error": str(exc),
-                        "_provider": self._provider,
+                        "_provider": provider,
                         "_model": model_name,
                         "_cached": False,
                         "_elapsed_ms": int((time.perf_counter() - started) * 1000),
@@ -294,10 +334,11 @@ class AIAgent:
         task: str = "chat",
     ) -> str:
         model_name = self._model_for_task(task, model)
+        provider = self._resolve_provider()
         safe_user_text = self._safe_text(user_text)
         cache_key = json.dumps(
             {
-                "provider": self._provider,
+                "provider": provider,
                 "model": model_name,
                 "system": system_prompt,
                 "user": safe_user_text,
@@ -315,10 +356,11 @@ class AIAgent:
 
         for attempt in range(retries + 1):
             try:
-                if self._provider == "anthropic":
-                    if not self._anthropic_client:
+                if provider == "anthropic":
+                    anthropic_client = self._get_anthropic_client(provider)
+                    if not anthropic_client:
                         return ""
-                    response = self._anthropic_client.messages.create(
+                    response = anthropic_client.messages.create(
                         model=model_name,
                         max_tokens=max_tokens,
                         temperature=settings.AI_TEMPERATURE,
@@ -329,9 +371,10 @@ class AIAgent:
                         block.text for block in response.content if getattr(block, "type", "") == "text"
                     ).strip()
                 else:
-                    if not self._openai_like_client:
+                    openai_client = self._get_openai_like_client(provider)
+                    if not openai_client:
                         return ""
-                    response = self._openai_like_client.chat.completions.create(
+                    response = openai_client.chat.completions.create(
                         model=model_name,
                         temperature=settings.AI_TEMPERATURE,
                         messages=[
@@ -499,7 +542,8 @@ class AIAgent:
         """
         text = self._safe_text(text)
 
-        has_client = self._anthropic_client is not None if self._provider == "anthropic" else self._openai_like_client is not None
+        provider = self._resolve_provider()
+        has_client = self._has_provider_client(provider)
         if not has_client:
             return self._fallback_group_analysis(text, "No AI credentials configured")
 
@@ -545,7 +589,7 @@ class AIAgent:
             return self._fallback_group_analysis(text, result["error"])
 
         merged = self._normalize_group_analysis(result, text)
-        merged["_provider"] = result.get("_provider", self._provider)
+        merged["_provider"] = result.get("_provider", provider)
         merged["_model"] = result.get("_model", self._model_for_task("radar"))
         merged["_cached"] = result.get("_cached", False)
         merged["_elapsed_ms"] = result.get("_elapsed_ms")
@@ -577,7 +621,8 @@ class AIAgent:
     # ========== Private Logic (DM 分类 / 标签 / Summary) ==========
 
     async def analyze_private_message(self, text: str) -> Dict[str, Any]:
-        has_client = self._anthropic_client is not None if self._provider == "anthropic" else self._openai_like_client is not None
+        provider = self._resolve_provider()
+        has_client = self._has_provider_client(provider)
         if not has_client:
             return {
                 "is_spam": False,
@@ -719,7 +764,8 @@ class AIAgent:
     # ========== Image Analysis (Vision) ==========
 
     async def analyze_image(self, image_path: str, caption: str | None = None) -> Dict[str, Any]:
-        if self._provider == "anthropic":
+        provider = self._resolve_provider()
+        if provider == "anthropic":
             return {
                 "summary": "当前 Anthropic Vision 通道尚未启用。",
                 "tags": [],
@@ -727,7 +773,8 @@ class AIAgent:
                 "error": "Anthropic vision is not implemented in this bot yet.",
             }
 
-        if not self._openai_like_client:
+        openai_client = self._get_openai_like_client(provider)
+        if not openai_client:
             return {"error": "Vision currently requires an OpenAI-compatible provider"}
 
         try:
@@ -751,8 +798,8 @@ class AIAgent:
         retries = max(0, settings.AI_RETRY_TIMES)
         for attempt in range(retries + 1):
             try:
-                response = self._openai_like_client.chat.completions.create(
-                    model=settings.get_model_for_task("vision"),
+                response = openai_client.chat.completions.create(
+                    model=self._model_for_task("vision"),
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content},
@@ -786,7 +833,8 @@ class AIAgent:
     # ========== Simple Chat Reply (for Chat Mode) ==========
 
     async def chat_reply(self, user_text: str) -> str:
-        has_client = self._anthropic_client is not None if self._provider == "anthropic" else self._openai_like_client is not None
+        provider = self._resolve_provider()
+        has_client = self._has_provider_client(provider)
         if not has_client:
             return "⚠️ 当前未配置 AI Provider API Key，无法进行 AI 对话。"
 

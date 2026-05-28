@@ -10,7 +10,12 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from src.bot.callbacks import build_home_keyboard, render_home_text
+from src.bot.callbacks import (
+    build_ai_provider_keyboard,
+    build_home_keyboard,
+    render_ai_provider_text,
+    render_home_text,
+)
 from src.config import settings
 from src.services.ai_agent import agent
 from src.services.blacklist_manager import blacklist
@@ -308,6 +313,17 @@ async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await safe_reply(update, "🏓 Pong! System operational.")
+
+
+async def cmd_ai_provider(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update, "ai_provider"):
+        return
+
+    await safe_reply(
+        update,
+        render_ai_provider_text(),
+        reply_markup=build_ai_provider_keyboard(),
+    )
 
 
 def _fmt_tags_hash(raw: Any) -> str:

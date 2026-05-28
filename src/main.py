@@ -21,6 +21,7 @@ from telegram.ext import (
 from src.bot.callbacks import handle_menu_callback
 
 from src.bot.commands import (
+    cmd_ai_provider,
     cmd_ai_test,
     cmd_blacklist,
     cmd_help,
@@ -75,7 +76,8 @@ def log_startup_summary() -> None:
     """Log a safe startup summary without leaking credentials."""
     summary = settings.public_runtime_summary()
     summary["telegram_bot_token"] = mask_secret(settings.TELEGRAM_BOT_TOKEN)
-    summary["openai_api_key"] = "configured" if settings.OPENAI_API_KEY else "missing"
+    summary["active_ai_key"] = "configured" if settings.active_ai_key_configured() else "missing"
+    summary["active_ai_provider_ready"] = settings.active_ai_provider_ready()
     log.info("Atrioly · Wanatring runtime summary: %s", summary)
 
 
@@ -93,8 +95,11 @@ def ensure_runtime_environment() -> bool:
     if not settings.FORWARD_TO:
         log.warning("FORWARD_TO is empty. Radar alerts will not be forwarded to any chat.")
 
-    if settings.ENABLE_AI_FILTER and not settings.OPENAI_API_KEY:
-        log.warning("ENABLE_AI_FILTER is true but OPENAI_API_KEY is missing. AI analysis will use safe fallback behavior.")
+    if settings.ENABLE_AI_FILTER and not settings.active_ai_provider_ready():
+        log.warning(
+            "ENABLE_AI_FILTER is true but AI_PROVIDER=%s is not ready. AI analysis will use safe fallback behavior.",
+            settings.AI_PROVIDER,
+        )
 
     return True
 
@@ -151,6 +156,7 @@ def register_commands(application: Application[Any, Any, Any, Any, Any, Any]) ->
         "blacklist": cmd_blacklist,
         "whitelist": cmd_whitelist,
         "ai_test": cmd_ai_test,
+        "ai_provider": cmd_ai_provider,
         "probe": cmd_probe,
         "listall": cmd_listall,
     }
