@@ -22,10 +22,32 @@ class Settings(BaseSettings):
 
     # Credentials
     TELEGRAM_BOT_TOKEN: str = ""
+    AI_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
+    DEEPSEEK_API_KEY: str | None = None
+    ANTHROPIC_API_KEY: str | None = None
+    OPENAI_COMPATIBLE_API_KEY: str | None = None
 
-    # AI
-    DEFAULT_MODEL: str = "gpt-5-mini"
+    # AI Provider Router
+    AI_PROVIDER: str = "openai"  # openai | deepseek | anthropic | openai_compatible
+    DEFAULT_MODEL: str = "gpt-4o-mini"
+    RADAR_MODEL: str | None = None
+    PRIVATE_MODEL: str | None = None
+    TASK_MODEL: str | None = None
+    CHAT_MODEL: str | None = None
+    VISION_MODEL: str = "gpt-4o"
+    AI_VISION_MODEL: str | None = None  # Backward-compatible alias
+
+    # Provider endpoints and models
+    AI_BASE_URL: str | None = None
+    OPENAI_BASE_URL: str | None = None
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
+    DEEPSEEK_MODEL: str = "deepseek-chat"
+    ANTHROPIC_MODEL: str = "claude-3-5-haiku-latest"
+    OPENAI_COMPATIBLE_BASE_URL: str | None = None
+    OPENAI_COMPATIBLE_MODEL: str | None = None
+
+    # AI Runtime
     MAX_MESSAGE_LENGTH: int = 1200
     AI_REQUEST_TIMEOUT_SECONDS: float = 30.0
     AI_RETRY_TIMES: int = 2
@@ -72,6 +94,30 @@ class Settings(BaseSettings):
     MIN_CONFIDENCE_TO_FORWARD: float = 0.65
     HIGH_RISK_THRESHOLD: int = 75
 
+    @field_validator(
+        "AI_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "RADAR_MODEL",
+        "PRIVATE_MODEL",
+        "TASK_MODEL",
+        "CHAT_MODEL",
+        "AI_VISION_MODEL",
+        "AI_BASE_URL",
+        "OPENAI_BASE_URL",
+        "OPENAI_COMPATIBLE_BASE_URL",
+        "OPENAI_COMPATIBLE_MODEL",
+        mode="before",
+    )
+    @classmethod
+    def empty_string_to_none(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     @field_validator("OWNER_IDS", mode="before")
     @classmethod
     def parse_owner_ids(cls, value: Any) -> Set[int]:
@@ -89,10 +135,22 @@ class Settings(BaseSettings):
         allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
         return level if level in allowed else "INFO"
 
+    @field_validator("AI_PROVIDER", mode="before")
+    @classmethod
+    def normalize_ai_provider(cls, value: Any) -> str:
+        provider = str(value or "openai").strip().lower().replace("-", "_")
+        allowed = {"openai", "deepseek", "anthropic", "openai_compatible"}
+        return provider if provider in allowed else "openai"
+
     @field_validator("MAX_MESSAGE_LENGTH")
     @classmethod
     def validate_max_message_length(cls, value: int) -> int:
         return max(100, min(value, 12000))
+
+    @field_validator("AI_REQUEST_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_ai_timeout(cls, value: float) -> float:
+        return max(5.0, min(float(value), 180.0))
 
     @field_validator("AI_RETRY_TIMES")
     @classmethod
@@ -103,6 +161,11 @@ class Settings(BaseSettings):
     @classmethod
     def validate_ai_temperature(cls, value: float) -> float:
         return max(0.0, min(value, 2.0))
+
+    @field_validator("AI_CACHE_TTL_SECONDS")
+    @classmethod
+    def validate_cache_ttl(cls, value: int) -> int:
+        return max(0, min(value, 86400))
 
     @field_validator("MIN_CONFIDENCE_TO_FORWARD")
     @classmethod
@@ -116,21 +179,11 @@ class Settings(BaseSettings):
 
     @staticmethod
     def _parse_id_collection(value: Union[str, int, list[Any], set[Any], tuple[Any], None]) -> List[int]:
-        """Parse Telegram ID collections from env-friendly formats.
-
-        Supported examples:
-        - 123456789
-        - "123456789"
-        - "123456789,987654321"
-        - "[123456789, 987654321]"
-        - [123456789, "987654321"]
-        """
+        """Parse Telegram ID collections from env-friendly formats."""
         if value is None:
             return []
-
         if isinstance(value, int):
             return [value]
-
         if isinstance(value, str):
             raw = value.strip()
             if not raw:
@@ -166,6 +219,59 @@ class Settings(BaseSettings):
     def state_path(self) -> Path:
         return self.data_path / self.STATE_DB_FILE
 
+    @property
+    def effective_openai_key(self) -> str | None:
+        return self.OPENAI_API_KEY or self.AI_API_KEY
+
+    @property
+    def effective_deepseek_key(self) -> str | None:
+        return self.DEEPSEEK_API_KEY or self.AI_API_KEY
+
+    @property
+    def effective_anthropic_key(self) -> str | None:
+        return self.ANTHROPIC_API_KEY or self.AI_API_KEY
+
+    @property
+    def effective_openai_compatible_key(self) -> str | None:
+        return self.OPENAI_COMPATIBLE_API_KEY or self.AI_API_KEY
+
+    @property
+    def effective_vision_model(self) -> str:
+        return self.AI_VISION_MODEL or self.VISION_MODEL
+
+    @property
+    def effective_default_model(self) -> str:
+        if self.AI_PROVIDER == "deepseek":
+            return self.DEEPSEEK_MODEL
+        if self.AI_PROVIDER == "anthropic":
+            return self.ANTHROPIC_MODEL
+        if self.AI_PROVIDER == "openai_compatible" and self.OPENAI_COMPATIBLE_MODEL:
+            return self.OPENAI_COMPATIBLE_MODEL
+        return self.DEFAULT_MODEL
+
+    def get_model_for_task(self, task: str) -> str:
+        task_name = str(task or "").strip().lower()
+        if task_name == "radar" and self.RADAR_MODEL:
+            return self.RADAR_MODEL
+        if task_name == "private" and self.PRIVATE_MODEL:
+            return self.PRIVATE_MODEL
+        if task_name == "task" and self.TASK_MODEL:
+            return self.TASK_MODEL
+        if task_name == "chat" and self.CHAT_MODEL:
+            return self.CHAT_MODEL
+        if task_name == "vision":
+            return self.effective_vision_model
+        return self.effective_default_model
+
+    def active_ai_key_configured(self) -> bool:
+        if self.AI_PROVIDER == "deepseek":
+            return bool(self.effective_deepseek_key)
+        if self.AI_PROVIDER == "anthropic":
+            return bool(self.effective_anthropic_key)
+        if self.AI_PROVIDER == "openai_compatible":
+            return bool(self.effective_openai_compatible_key)
+        return bool(self.effective_openai_key)
+
     def is_owner(self, user_id: int | None) -> bool:
         return user_id is not None and user_id in self.OWNER_IDS
 
@@ -179,10 +285,17 @@ class Settings(BaseSettings):
     def public_runtime_summary(self) -> dict[str, Any]:
         """Safe configuration snapshot for logs and `/status`.
 
-        This intentionally excludes Bot Token and API Key.
+        This intentionally excludes Bot Token and API Keys.
         """
         return {
-            "model": self.DEFAULT_MODEL,
+            "provider": self.AI_PROVIDER,
+            "model": self.effective_default_model,
+            "radar_model": self.get_model_for_task("radar"),
+            "private_model": self.get_model_for_task("private"),
+            "task_model": self.get_model_for_task("task"),
+            "chat_model": self.get_model_for_task("chat"),
+            "vision_model": self.get_model_for_task("vision"),
+            "active_ai_key_configured": self.active_ai_key_configured(),
             "log_level": self.LOG_LEVEL,
             "data_dir": self.DATA_DIR,
             "owners": len(self.OWNER_IDS),
@@ -195,6 +308,9 @@ class Settings(BaseSettings):
             "heuristic_filter": self.ENABLE_HEURISTIC_FILTER,
             "timezone": self.DEFAULT_TIMEZONE,
             "max_message_length": self.MAX_MESSAGE_LENGTH,
+            "ai_timeout_seconds": self.AI_REQUEST_TIMEOUT_SECONDS,
+            "ai_retry_times": self.AI_RETRY_TIMES,
+            "ai_cache_ttl_seconds": self.AI_CACHE_TTL_SECONDS,
         }
 
 
