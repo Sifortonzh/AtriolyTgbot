@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     MAX_MESSAGE_LENGTH: int = 1200
     AI_REQUEST_TIMEOUT_SECONDS: float = 30.0
     AI_RETRY_TIMES: int = 2
+    AI_PROVIDER_RETRY_TIMES: int = 1
+    AI_FAILOVER_FAST_ON_NETWORK_ERROR: bool = True
     AI_TEMPERATURE: float = 0.2
     AI_CACHE_TTL_SECONDS: int = 300
 
@@ -188,6 +190,11 @@ class Settings(BaseSettings):
     @classmethod
     def validate_ai_retry_times(cls, value: int) -> int:
         return max(0, min(value, 5))
+
+    @field_validator("AI_PROVIDER_RETRY_TIMES")
+    @classmethod
+    def validate_ai_provider_retry_times(cls, value: int) -> int:
+        return max(0, min(value, 3))
 
     @field_validator("AI_TEMPERATURE")
     @classmethod
@@ -444,6 +451,8 @@ class Settings(BaseSettings):
             "provider_ready": self.active_ai_provider_ready(),
             "timeout_seconds": self.AI_REQUEST_TIMEOUT_SECONDS,
             "retry_times": self.AI_RETRY_TIMES,
+            "provider_retry_times": self.AI_PROVIDER_RETRY_TIMES,
+            "failover_fast_on_network_error": self.AI_FAILOVER_FAST_ON_NETWORK_ERROR,
             "temperature": self.AI_TEMPERATURE,
             "cache_ttl_seconds": self.AI_CACHE_TTL_SECONDS,
             "provider_fallbacks": self.AI_PROVIDER_FALLBACKS,
@@ -491,6 +500,8 @@ class Settings(BaseSettings):
             "max_message_length": self.MAX_MESSAGE_LENGTH,
             "ai_timeout_seconds": self.AI_REQUEST_TIMEOUT_SECONDS,
             "ai_retry_times": self.AI_RETRY_TIMES,
+            "ai_provider_retry_times": self.AI_PROVIDER_RETRY_TIMES,
+            "ai_failover_fast_on_network_error": self.AI_FAILOVER_FAST_ON_NETWORK_ERROR,
             "ai_cache_ttl_seconds": self.AI_CACHE_TTL_SECONDS,
         }
 

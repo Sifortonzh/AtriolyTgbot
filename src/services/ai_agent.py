@@ -185,6 +185,27 @@ class AIAgent:
             return self._get_anthropic_client(provider) is not None
         return self._get_openai_like_client(provider) is not None
 
+    @staticmethod
+    def _is_network_error(exc: Exception) -> bool:
+        name = exc.__class__.__name__.lower()
+        text = str(exc).lower()
+        network_markers = (
+            "connection",
+            "connect",
+            "timeout",
+            "timed out",
+            "dns",
+            "name resolution",
+            "network",
+            "unreachable",
+            "apiconnectionerror",
+        )
+        if any(marker in name for marker in ("connect", "timeout", "network", "apierror")):
+            if "validation" in name:
+                return False
+            return any(marker in text for marker in network_markers) or "api" in name
+        return any(marker in text for marker in network_markers)
+
     async def _call_gpt_for_provider(
         self,
         provider: str,
@@ -240,6 +261,14 @@ class AIAgent:
                 return result
             except Exception as exc:  # noqa: BLE001
                 log.warning("AI call failed provider=%s (attempt %s/%s): %s", provider, attempt + 1, retries + 1, exc)
+                if settings.AI_FAILOVER_FAST_ON_NETWORK_ERROR and self._is_network_error(exc):
+                    return {
+                        "error": str(exc),
+                        "_provider": provider,
+                        "_model": model_name,
+                        "_cached": False,
+                        "_elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    }
                 if attempt >= retries:
                     return {
                         "error": str(exc),
@@ -338,7 +367,7 @@ class AIAgent:
         if cached is not None:
             return cached
 
-        retries = max(0, settings.AI_RETRY_TIMES)
+        retries = max(0, settings.AI_PROVIDER_RETRY_TIMES)
         delay_seconds = 0.6
         started = time.perf_counter()
         provider_failures: list[str] = []
@@ -405,7 +434,7 @@ class AIAgent:
         if isinstance(cached, str):
             return cached
 
-        retries = max(0, settings.AI_RETRY_TIMES)
+        retries = max(0, settings.AI_PROVIDER_RETRY_TIMES)
         delay_seconds = 0.6
 
         for provider in provider_chain:
@@ -450,6 +479,8 @@ class AIAgent:
                         retries + 1,
                         exc,
                     )
+                    if settings.AI_FAILOVER_FAST_ON_NETWORK_ERROR and self._is_network_error(exc):
+                        break
                     if attempt >= retries:
                         break
                     await asyncio.sleep(delay_seconds * (attempt + 1))
