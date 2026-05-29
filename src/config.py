@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     # AI Provider Router
     AI_PROVIDER: str = "openai"  # openai | deepseek | anthropic | openai_compatible
+    AI_PROVIDER_FALLBACKS: str | None = None
     DEFAULT_MODEL: str = "gpt-4o-mini"
     RADAR_MODEL: str | None = None
     PRIVATE_MODEL: str | None = None
@@ -109,6 +110,7 @@ class Settings(BaseSettings):
         "OPENAI_BASE_URL",
         "OPENAI_COMPATIBLE_BASE_URL",
         "OPENAI_COMPATIBLE_MODEL",
+        "AI_PROVIDER_FALLBACKS",
         mode="before",
     )
     @classmethod
@@ -308,10 +310,84 @@ class Settings(BaseSettings):
         if provider_name == "deepseek":
             return self.DEEPSEEK_BASE_URL
         if provider_name == "openai_compatible":
-            return self.OPENAI_COMPATIBLE_BASE_URL
+            return self.OPENAI_COMPATIBLE_BASE_URL or self.AI_BASE_URL
         if provider_name == "openai":
             return self.OPENAI_BASE_URL or self.AI_BASE_URL
         return None
+
+    @staticmethod
+    def _normalize_provider_name(provider: str | None) -> str:
+        provider_name = str(provider or "openai").strip().lower().replace("-", "_")
+        allowed = {"openai", "deepseek", "anthropic", "openai_compatible"}
+        return provider_name if provider_name in allowed else "openai"
+
+    def is_provider_ready(self, provider: str) -> bool:
+        provider_name = self._normalize_provider_name(provider)
+        api_key = self.get_api_key_for_provider(provider_name)
+        if not api_key:
+            return False
+
+        if provider_name == "openai_compatible":
+            if not (self.OPENAI_COMPATIBLE_BASE_URL or self.AI_BASE_URL):
+                return False
+            if not (self.OPENAI_COMPATIBLE_MODEL or self.DEFAULT_MODEL):
+                return False
+            return True
+
+        if provider_name == "openai":
+            return bool(self.effective_openai_key)
+        if provider_name == "deepseek":
+            return bool(self.effective_deepseek_key)
+        if provider_name == "anthropic":
+            return bool(self.effective_anthropic_key)
+
+        return False
+
+    def get_default_model_for_provider(self, provider: str) -> str:
+        provider_name = self._normalize_provider_name(provider)
+        if provider_name == "deepseek":
+            return self.DEEPSEEK_MODEL
+        if provider_name == "anthropic":
+            return self.ANTHROPIC_MODEL
+        if provider_name == "openai_compatible":
+            return self.OPENAI_COMPATIBLE_MODEL or self.DEFAULT_MODEL
+        return self.DEFAULT_MODEL
+
+    def get_ready_ai_providers(self) -> List[str]:
+        ordered = ["openai", "deepseek", "anthropic", "openai_compatible"]
+        return [provider for provider in ordered if self.is_provider_ready(provider)]
+
+    def get_ai_provider_fallback_chain(self, primary: str | None = None) -> List[str]:
+        effective_primary = self._normalize_provider_name(primary or self.AI_PROVIDER)
+        configured_raw = self.AI_PROVIDER_FALLBACKS
+        configured: List[str] = []
+        if configured_raw:
+            configured = [
+                self._normalize_provider_name(item)
+                for item in configured_raw.split(",")
+                if str(item).strip()
+            ]
+
+        chain: List[str] = []
+        seen: set[str] = set()
+
+        for provider in [effective_primary, *configured] if configured else [effective_primary, "openai", "deepseek", "anthropic", "openai_compatible"]:
+            p = self._normalize_provider_name(provider)
+            if p in seen:
+                continue
+            seen.add(p)
+            if self.is_provider_ready(p):
+                chain.append(p)
+
+        return chain
+
+    def public_ai_failover_summary(self) -> dict[str, Any]:
+        return {
+            "default_provider": self.AI_PROVIDER,
+            "configured_fallbacks": self.AI_PROVIDER_FALLBACKS,
+            "ready_providers": self.get_ready_ai_providers(),
+            "fallback_chain": self.get_ai_provider_fallback_chain(),
+        }
 
     def active_ai_key_configured(self) -> bool:
         return bool(self.get_api_key_for_provider())
@@ -339,6 +415,9 @@ class Settings(BaseSettings):
             "retry_times": self.AI_RETRY_TIMES,
             "temperature": self.AI_TEMPERATURE,
             "cache_ttl_seconds": self.AI_CACHE_TTL_SECONDS,
+            "provider_fallbacks": self.AI_PROVIDER_FALLBACKS,
+            "ready_providers": self.get_ready_ai_providers(),
+            "fallback_chain": self.get_ai_provider_fallback_chain(),
         }
 
     def is_owner(self, user_id: int | None) -> bool:
