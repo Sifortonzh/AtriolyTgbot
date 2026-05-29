@@ -480,6 +480,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     header, header_kb = build_private_service_card(update, analysis)
 
     targets = settings.get_forward_targets()
+    delivered = False
     for admin_id in targets:
         try:
             # Header
@@ -498,12 +499,21 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             )
             # 注册回复桥接
             state_manager.register_forward(fwd_msg.message_id, user.id)
+            delivered = True
 
         except Exception as e:
             log.error(f"Failed to forward DM to {admin_id}: {e}")
 
-    # 如需给普通用户一个确认，可以在这里打开：
-    # await msg.reply_text("Your message has been received by support.")
+    if delivered:
+        await msg.reply_text(
+            "✅ 已收到你的消息，Wanatring 已悄悄递给主人啦 📨\n"
+            "先喝口水等一等，他看到后会尽快回你～ 🌿"
+        )
+    else:
+        await msg.reply_text(
+            "⚠️ 消息刚才没能送给主人。\n"
+            "可以稍后再试一次，或者换个方式联系他～ 🍃"
+        )
 
 
 # --- Admin Reply Logic (The Bridge) ---
