@@ -1,7 +1,8 @@
 import logging
 import os
 import re
-from telegram import Update
+import html
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ApplicationHandlerStop
 
@@ -14,6 +15,103 @@ from src.services.task_manager import task_manager  # NEW
 
 # Setup Logger
 log = logging.getLogger(__name__)
+
+
+def _safe_original_message_link(msg) -> str | None:
+    try:
+        link = getattr(msg, "link", None)
+        if link:
+            return str(link)
+    except Exception:
+        return None
+    return None
+
+
+def _format_price_line(analysis: dict) -> str:
+    price = analysis.get("price")
+    currency = str(analysis.get("currency") or "").upper()
+    if price in (None, ""):
+        return "—"
+
+    if currency == "CNY":
+        currency_prefix = "¥"
+    elif currency == "USD":
+        currency_prefix = "$"
+    else:
+        currency_prefix = ""
+
+    price_text = f"{price}" if isinstance(price, (int, float)) else str(price)
+    suffix = " / month"
+    return f"{currency_prefix}{html.escape(price_text)}{suffix}"
+
+
+def build_membership_report_card(update: Update, analysis: dict) -> tuple[str, InlineKeyboardMarkup]:
+    msg = update.effective_message
+    user = update.effective_user
+
+    platform = html.escape(str(analysis.get("platform") or "Unknown"))
+    intent = html.escape(str(analysis.get("intent") or "Unknown").capitalize())
+    risk = html.escape(str(analysis.get("risk_score") if analysis.get("risk_score") is not None else "—"))
+    confidence_value = analysis.get("confidence")
+    if isinstance(confidence_value, (int, float)):
+        confidence = f"{confidence_value:.2f}"
+    elif confidence_value is None:
+        confidence = "—"
+    else:
+        confidence = str(confidence_value)
+    confidence = html.escape(confidence)
+
+    summary = html.escape(str(analysis.get("summary") or "No details"))
+    price_line = _format_price_line(analysis)
+
+    sender_name = "Unknown"
+    sender_id = "unknown"
+    sender_profile_url = None
+    if user:
+        sender_name = user.full_name or "Unknown"
+        sender_id = str(user.id)
+        sender_profile_url = f"https://t.me/{user.username}" if user.username else f"tg://user?id={user.id}"
+
+    sender_html = html.escape(sender_name)
+    sender_line = f"👤 Sender: {sender_html}"
+    if settings.ENABLE_SENDER_PROFILE_LINK and sender_profile_url:
+        sender_line = f"👤 Sender: <a href=\"{html.escape(sender_profile_url)}\">{sender_html}</a>"
+
+    original_link = _safe_original_message_link(msg)
+    if original_link:
+        original_line = f"🔗 Original Message: <a href=\"{html.escape(original_link)}\">Open</a>"
+    else:
+        original_line = "🔗 Original Message: unavailable"
+
+    card_text = (
+        "💠 <b>Verified Opportunity</b>\n\n"
+        f"🎬 Platform: {platform}\n"
+        f"💰 Price: {price_line}\n"
+        f"🧭 Intent: {intent}\n"
+        f"⚠️ Risk: {risk} / 100\n"
+        f"📊 Confidence: {confidence}\n\n"
+        f"📝 Summary: {summary}\n\n"
+        f"{sender_line}\n"
+        f"🆔 User ID: {html.escape(sender_id)}\n"
+        f"{original_line}"
+    )
+
+    callback_uid = sender_id if sender_id.isdigit() else "0"
+    callback_mid = str(msg.message_id if msg else 0)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Save", callback_data=f"report:save:{callback_uid}:{callback_mid}"),
+                InlineKeyboardButton("🚫 Blacklist", callback_data=f"report:blacklist:{callback_uid}:{callback_mid}"),
+            ],
+            [
+                InlineKeyboardButton("👁 View Sender", callback_data=f"report:view_sender:{callback_uid}:{callback_mid}"),
+                InlineKeyboardButton("📝 Add Note", callback_data=f"report:add_note:{callback_uid}:{callback_mid}"),
+            ],
+        ]
+    )
+
+    return card_text, keyboard
 
 
 def _escape_markdown_text(text: str) -> str:
@@ -125,17 +223,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Branch B: Membership Opportunity
     if analysis.get("is_membership"):
         platform = analysis.get("platform", "Unknown")
-        summary = analysis.get("summary", "No details")
 
         log.info(f"💎 MEMBERSHIP FOUND | Platform: {platform} | Forwarding to admins...")
-
-        alert_msg = (
-            f"💠 **Verified Opportunity**\n"
-            f"🎬 **Service**: {platform}\n"
-            f"📊 **Details**: {summary}\n"
-            f"{_build_sender_profile_lines(user)}"
-            f"🔗 [Original Message]({msg.link})"
-        )
+        alert_msg, alert_kb = build_membership_report_card(update, analysis)
 
         targets = settings.get_forward_targets()
         if not targets:
@@ -144,7 +234,11 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         for admin in targets:
             try:
                 await context.bot.send_message(
-                    chat_id=admin, text=alert_msg, parse_mode=ParseMode.MARKDOWN
+                    chat_id=admin,
+                    text=alert_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=alert_kb,
+                    disable_web_page_preview=True,
                 )
                 log.info(f"🚀 Sent alert to Admin ID: {admin}")
             except Exception as e:

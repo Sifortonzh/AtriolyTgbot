@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes
 
 from src.config import settings
 from src.services import ai_runtime
+from src.services.blacklist_manager import blacklist
 from src.services.membership import manager
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager
@@ -281,10 +282,49 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if not query:
         return
 
-    await query.answer()
     data = query.data or ""
     owner = is_owner(update)
     user_id = current_user_id(update)
+
+    if data.startswith("report:"):
+        if not owner:
+            await query.answer("Owner only.", show_alert=True)
+            return
+
+        parts = data.split(":")
+        if len(parts) < 4:
+            await query.answer("Invalid report action.", show_alert=True)
+            return
+
+        action = parts[1]
+        target_user_id = parts[2]
+
+        if action == "save":
+            await query.answer("Saved placeholder. Persistence will be added later.", show_alert=True)
+            return
+
+        if action == "blacklist":
+            try:
+                uid = int(target_user_id)
+                blacklist.ban_user(uid)
+                await query.answer(f"User {uid} blacklisted.", show_alert=True)
+            except Exception:
+                await query.answer("Blacklist placeholder. Persistence will be wired later.", show_alert=True)
+            return
+
+        if action == "view_sender":
+            link = f"tg://user?id={target_user_id}"
+            await query.answer(f"Sender: {link}", show_alert=True)
+            return
+
+        if action == "add_note":
+            await query.answer("Note placeholder. Note storage will be added later.", show_alert=True)
+            return
+
+        await query.answer("Unknown report action.", show_alert=True)
+        return
+
+    await query.answer()
 
     if data == "menu:home":
         await _safe_edit(query, render_home_text(update), build_home_keyboard(owner))

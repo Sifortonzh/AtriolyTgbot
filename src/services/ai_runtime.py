@@ -153,6 +153,7 @@ def summary() -> dict[str, Any]:
     active = bool(runtime)
     provider = effective_provider()
     model = effective_model_for_task("chat")
+    fallback_chain = settings.get_ai_provider_fallback_chain(provider)
 
     return {
         "runtime_override_active": active,
@@ -162,4 +163,5 @@ def summary() -> dict[str, Any]:
         "default_provider": settings.AI_PROVIDER,
         "api_key_configured": _api_key_configured(provider),
         "provider_ready": _provider_ready(provider),
+        "fallback_chain": fallback_chain,
     }

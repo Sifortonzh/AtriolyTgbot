@@ -164,7 +164,7 @@ def register_commands(application: Application[Any, Any, Any, Any, Any, Any]) ->
     for command, handler in command_handlers.items():
         application.add_handler(CommandHandler(command, handler))
 
-    application.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^menu:"))
+    application.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^(menu:|report:)"))
 
 
 def register_message_handlers(application: Application[Any, Any, Any, Any, Any, Any]) -> None:
