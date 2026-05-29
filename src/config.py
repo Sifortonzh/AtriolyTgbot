@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # AI Runtime
     MAX_MESSAGE_LENGTH: int = 1200
     AI_REQUEST_TIMEOUT_SECONDS: float = 30.0
+    AI_PROVIDER_CONNECT_TIMEOUT_SECONDS: float = 5.0
     AI_RETRY_TIMES: int = 2
     AI_PROVIDER_RETRY_TIMES: int = 1
     AI_FAILOVER_FAST_ON_NETWORK_ERROR: bool = True
@@ -185,6 +186,11 @@ class Settings(BaseSettings):
     @classmethod
     def validate_ai_timeout(cls, value: float) -> float:
         return max(5.0, min(float(value), 180.0))
+
+    @field_validator("AI_PROVIDER_CONNECT_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_ai_provider_connect_timeout(cls, value: float) -> float:
+        return max(1.0, min(float(value), 30.0))
 
     @field_validator("AI_RETRY_TIMES")
     @classmethod
@@ -450,6 +456,7 @@ class Settings(BaseSettings):
             "api_key_configured": self.active_ai_key_configured(),
             "provider_ready": self.active_ai_provider_ready(),
             "timeout_seconds": self.AI_REQUEST_TIMEOUT_SECONDS,
+            "provider_connect_timeout_seconds": self.AI_PROVIDER_CONNECT_TIMEOUT_SECONDS,
             "retry_times": self.AI_RETRY_TIMES,
             "provider_retry_times": self.AI_PROVIDER_RETRY_TIMES,
             "failover_fast_on_network_error": self.AI_FAILOVER_FAST_ON_NETWORK_ERROR,
@@ -499,6 +506,7 @@ class Settings(BaseSettings):
             "timezone": self.DEFAULT_TIMEZONE,
             "max_message_length": self.MAX_MESSAGE_LENGTH,
             "ai_timeout_seconds": self.AI_REQUEST_TIMEOUT_SECONDS,
+            "ai_provider_connect_timeout_seconds": self.AI_PROVIDER_CONNECT_TIMEOUT_SECONDS,
             "ai_retry_times": self.AI_RETRY_TIMES,
             "ai_provider_retry_times": self.AI_PROVIDER_RETRY_TIMES,
             "ai_failover_fast_on_network_error": self.AI_FAILOVER_FAST_ON_NETWORK_ERROR,

@@ -107,6 +107,10 @@ class AIAgent:
 
     def _build_openai_like_client(self, provider: str) -> OpenAI | None:
         provider = self._normalize_provider(provider)
+        short_openai_timeout = min(
+            settings.AI_REQUEST_TIMEOUT_SECONDS,
+            settings.AI_PROVIDER_CONNECT_TIMEOUT_SECONDS,
+        )
 
         if provider == "openai":
             api_key = settings.effective_openai_key
@@ -114,21 +118,36 @@ class AIAgent:
                 return None
             base_url = settings.OPENAI_BASE_URL or settings.AI_BASE_URL
             if base_url:
-                return OpenAI(api_key=api_key, base_url=base_url, timeout=settings.AI_REQUEST_TIMEOUT_SECONDS)
-            return OpenAI(api_key=api_key, timeout=settings.AI_REQUEST_TIMEOUT_SECONDS)
+                return OpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    timeout=short_openai_timeout,
+                    max_retries=0,
+                )
+            return OpenAI(api_key=api_key, timeout=short_openai_timeout, max_retries=0)
 
         if provider == "deepseek":
             api_key = settings.effective_deepseek_key
             if not api_key:
                 return None
-            return OpenAI(api_key=api_key, base_url=settings.DEEPSEEK_BASE_URL, timeout=settings.AI_REQUEST_TIMEOUT_SECONDS)
+            return OpenAI(
+                api_key=api_key,
+                base_url=settings.DEEPSEEK_BASE_URL,
+                timeout=settings.AI_REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
 
         if provider == "openai_compatible":
             api_key = settings.effective_openai_compatible_key
-            base_url = settings.OPENAI_COMPATIBLE_BASE_URL
+            base_url = settings.OPENAI_COMPATIBLE_BASE_URL or settings.AI_BASE_URL
             if not api_key or not base_url:
                 return None
-            return OpenAI(api_key=api_key, base_url=base_url, timeout=settings.AI_REQUEST_TIMEOUT_SECONDS)
+            return OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=settings.AI_REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            )
 
         return None
 
