@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     AI_BASE_URL: str | None = None
     OPENAI_BASE_URL: str | None = None
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL: str = "deepseek-chat"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"
     ANTHROPIC_MODEL: str = "claude-3-5-haiku-latest"
     OPENAI_COMPATIBLE_BASE_URL: str | None = None
     OPENAI_COMPATIBLE_MODEL: str | None = None
@@ -165,8 +165,8 @@ class Settings(BaseSettings):
     @field_validator("DEEPSEEK_MODEL", mode="before")
     @classmethod
     def normalize_deepseek_model(cls, value: Any) -> str:
-        model = str(value or "deepseek-chat").strip()
-        return model or "deepseek-chat"
+        model = str(value or "deepseek-v4-flash").strip()
+        return model or "deepseek-v4-flash"
 
     @field_validator("ANTHROPIC_MODEL", mode="before")
     @classmethod
@@ -281,8 +281,41 @@ class Settings(BaseSettings):
             return self.OPENAI_COMPATIBLE_MODEL
         return self.DEFAULT_MODEL
 
-    def get_model_for_task(self, task: str) -> str:
+    def get_model_for_task(self, task: str, provider: str | None = None) -> str:
         task_name = str(task or "").strip().lower()
+        provider_name = self._normalize_provider_name(provider or self.AI_PROVIDER)
+
+        if provider is None:
+            if task_name == "radar" and self.RADAR_MODEL:
+                return self.RADAR_MODEL
+            if task_name == "private" and self.PRIVATE_MODEL:
+                return self.PRIVATE_MODEL
+            if task_name == "task" and self.TASK_MODEL:
+                return self.TASK_MODEL
+            if task_name == "chat" and self.CHAT_MODEL:
+                return self.CHAT_MODEL
+            if task_name == "vision":
+                return self.effective_vision_model
+            return self.effective_default_model
+
+        # Provider-specific defaults for failover/runtime override execution.
+        if task_name == "vision":
+            if provider_name == "deepseek":
+                return self.DEEPSEEK_MODEL
+            if provider_name == "anthropic":
+                return self.ANTHROPIC_MODEL
+            if provider_name == "openai_compatible":
+                return self.OPENAI_COMPATIBLE_MODEL or self.DEFAULT_MODEL
+            return self.effective_vision_model
+
+        if provider_name == "deepseek":
+            return self.DEEPSEEK_MODEL
+        if provider_name == "anthropic":
+            return self.ANTHROPIC_MODEL
+        if provider_name == "openai_compatible":
+            return self.OPENAI_COMPATIBLE_MODEL or self.DEFAULT_MODEL
+
+        # OpenAI provider-specific path keeps task overrides.
         if task_name == "radar" and self.RADAR_MODEL:
             return self.RADAR_MODEL
         if task_name == "private" and self.PRIVATE_MODEL:
@@ -291,9 +324,7 @@ class Settings(BaseSettings):
             return self.TASK_MODEL
         if task_name == "chat" and self.CHAT_MODEL:
             return self.CHAT_MODEL
-        if task_name == "vision":
-            return self.effective_vision_model
-        return self.effective_default_model
+        return self.DEFAULT_MODEL
 
     def get_api_key_for_provider(self, provider: str | None = None) -> str | None:
         provider_name = (provider or self.AI_PROVIDER or "openai").strip().lower().replace("-", "_")

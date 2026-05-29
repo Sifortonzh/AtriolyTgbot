@@ -141,10 +141,10 @@ class AIAgent:
             return None
         return Anthropic(api_key=api_key, timeout=settings.AI_REQUEST_TIMEOUT_SECONDS)
 
-    def _model_for_task(self, task: str, model: str | None = None) -> str:
+    def _model_for_task(self, task: str, model: str | None = None, provider: str | None = None) -> str:
         if model:
             return model
-        return ai_runtime.effective_model_for_task(task)
+        return ai_runtime.effective_model_for_task(task, provider=provider)
 
     def _resolve_provider(self) -> str:
         return self._normalize_provider(ai_runtime.effective_provider())
@@ -319,14 +319,14 @@ class AIAgent:
         task: str = "radar",
     ) -> Dict[str, Any]:
         """Call providers with failover chain and parse JSON."""
-        model_name = self._model_for_task(task, model)
         provider_chain = self._resolve_provider_chain()
         primary_provider = provider_chain[0]
         safe_user_text = self._safe_text(user_text)
         cache_key = json.dumps(
             {
                 "providers": provider_chain,
-                "model": model_name,
+                "task": task,
+                "model_override": model,
                 "system": system_prompt,
                 "user": safe_user_text,
                 "mode": "json",
@@ -344,6 +344,7 @@ class AIAgent:
         provider_failures: list[str] = []
 
         for provider in provider_chain:
+            model_name = self._model_for_task(task, model, provider=provider)
             result = await self._call_gpt_for_provider(
                 provider,
                 model_name,
@@ -369,7 +370,7 @@ class AIAgent:
         return {
             "error": provider_failures[-1] if provider_failures else "Unknown AI error",
             "_provider": primary_provider,
-            "_model": model_name,
+            "_model": self._model_for_task(task, model, provider=primary_provider),
             "_cached": False,
             "_elapsed_ms": int((time.perf_counter() - started) * 1000),
             "_provider_used": None,
@@ -386,13 +387,13 @@ class AIAgent:
         *,
         task: str = "chat",
     ) -> str:
-        model_name = self._model_for_task(task, model)
         provider_chain = self._resolve_provider_chain()
         safe_user_text = self._safe_text(user_text)
         cache_key = json.dumps(
             {
                 "providers": provider_chain,
-                "model": model_name,
+                "task": task,
+                "model_override": model,
                 "system": system_prompt,
                 "user": safe_user_text,
                 "mode": "text",
@@ -408,6 +409,7 @@ class AIAgent:
         delay_seconds = 0.6
 
         for provider in provider_chain:
+            model_name = self._model_for_task(task, model, provider=provider)
             for attempt in range(retries + 1):
                 try:
                     if provider == "anthropic":
@@ -863,7 +865,7 @@ class AIAgent:
         for attempt in range(retries + 1):
             try:
                 response = openai_client.chat.completions.create(
-                    model=self._model_for_task("vision"),
+                    model=self._model_for_task("vision", provider=selected_provider),
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content},

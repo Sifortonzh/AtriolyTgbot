@@ -114,11 +114,12 @@ def effective_provider() -> str:
     return _normalize_provider(settings.AI_PROVIDER)
 
 
-def effective_model_for_task(task: str) -> str:
+def effective_model_for_task(task: str, provider: str | None = None) -> str:
     runtime = get()
     task_name = str(task or "").strip().lower()
+    target_provider = _normalize_provider(provider) if provider else effective_provider()
 
-    if runtime:
+    if runtime and target_provider == _normalize_provider(runtime.get("provider") or settings.AI_PROVIDER):
         if task_name == "radar" and runtime.get("radar_model"):
             return str(runtime["radar_model"])
         if task_name == "private" and runtime.get("private_model"):
@@ -132,20 +133,10 @@ def effective_model_for_task(task: str) -> str:
         if runtime.get("model"):
             return str(runtime["model"])
 
-    provider = effective_provider()
+    provider = target_provider
     if task_name == "vision":
-        return settings.effective_vision_model
-    if provider == settings.AI_PROVIDER:
-        return settings.get_model_for_task(task_name)
-    if task_name == "radar" and settings.RADAR_MODEL:
-        return settings.RADAR_MODEL
-    if task_name == "private" and settings.PRIVATE_MODEL:
-        return settings.PRIVATE_MODEL
-    if task_name == "task" and settings.TASK_MODEL:
-        return settings.TASK_MODEL
-    if task_name == "chat" and settings.CHAT_MODEL:
-        return settings.CHAT_MODEL
-    return _default_model_for_provider(provider)
+        return settings.get_model_for_task(task_name, provider=provider)
+    return settings.get_model_for_task(task_name, provider=provider)
 
 
 def summary() -> dict[str, Any]:
