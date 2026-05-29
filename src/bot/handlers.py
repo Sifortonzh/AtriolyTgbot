@@ -105,7 +105,7 @@ def build_membership_report_card(update: Update, analysis: dict) -> tuple[str, I
                 InlineKeyboardButton("🚫 Blacklist", callback_data=f"report:blacklist:{callback_uid}:{callback_mid}"),
             ],
             [
-                InlineKeyboardButton("👁 View Sender", callback_data=f"report:view_sender:{callback_uid}:{callback_mid}"),
+                InlineKeyboardButton("👁 View Sender", url=sender_profile_url or f"tg://user?id={callback_uid}"),
                 InlineKeyboardButton("📝 Add Note", callback_data=f"report:add_note:{callback_uid}:{callback_mid}"),
             ],
         ]
