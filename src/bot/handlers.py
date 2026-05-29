@@ -114,6 +114,93 @@ def build_membership_report_card(update: Update, analysis: dict) -> tuple[str, I
     return card_text, keyboard
 
 
+def _normalize_private_category(raw: str | None) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"membership_sharing", "membership"}:
+        return "membership"
+    if value in {"support", "billing", "general", "general_chat", "spam"}:
+        return "general" if value == "general_chat" else value
+    return "general"
+
+
+def _derive_private_priority(category: str, analysis: dict) -> str:
+    explicit = str(analysis.get("priority") or "").strip().lower()
+    if explicit in {"normal", "high", "urgent"}:
+        return explicit
+
+    risk = analysis.get("risk_score")
+    try:
+        risk_num = int(risk) if risk is not None else None
+    except (TypeError, ValueError):
+        risk_num = None
+
+    if risk_num is not None:
+        if risk_num >= 85:
+            return "urgent"
+        if risk_num >= 60:
+            return "high"
+
+    if bool(analysis.get("is_spam")):
+        return "urgent"
+    if category in {"membership", "billing"}:
+        return "high"
+    return "normal"
+
+
+def build_private_service_card(update: Update, analysis: dict) -> tuple[str, InlineKeyboardMarkup]:
+    msg = update.effective_message
+    user = update.effective_user
+    message_text = (msg.text or "") if msg else ""
+    preview = html.escape(message_text[:800]) if message_text else "(empty)"
+
+    category = _normalize_private_category(analysis.get("category"))
+    priority = _derive_private_priority(category, analysis)
+
+    summary_raw = str(analysis.get("summary") or "").strip()
+    if not summary_raw:
+        summary_raw = message_text[:120] if message_text else "No summary"
+    summary = html.escape(summary_raw)
+
+    sender_name = user.full_name if user and user.full_name else "Unknown"
+    sender_name_html = html.escape(sender_name)
+    sender_id = str(user.id) if user else "0"
+    sender_url = (
+        f"https://t.me/{user.username}" if user and user.username else f"tg://user?id={sender_id}"
+    )
+
+    sender_line = f"👤 Sender: {sender_name_html}"
+    if settings.ENABLE_SENDER_PROFILE_LINK and user:
+        sender_line = f"👤 Sender: <a href=\"{html.escape(sender_url)}\">{sender_name_html}</a>"
+
+    card_text = (
+        "📨 <b>Private Message</b>\n\n"
+        f"{sender_line}\n"
+        f"🆔 User ID: {html.escape(sender_id)}\n"
+        f"🏷 Category: {html.escape(category)}\n"
+        f"🧠 Priority: {html.escape(priority)}\n"
+        f"📝 Summary: {summary}\n\n"
+        "💬 Message:\n"
+        f"{preview}"
+    )
+
+    callback_uid = sender_id if sender_id.isdigit() else "0"
+    callback_mid = str(msg.message_id if msg else 0)
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("↩️ Reply Guide", callback_data=f"private:reply_guide:{callback_uid}:{callback_mid}"),
+                InlineKeyboardButton("👁 View Sender", url=sender_url),
+            ],
+            [
+                InlineKeyboardButton("🚫 Blacklist", callback_data=f"private:blacklist:{callback_uid}:{callback_mid}"),
+                InlineKeyboardButton("✅ Mark Resolved", callback_data=f"private:resolved:{callback_uid}:{callback_mid}"),
+            ],
+        ]
+    )
+
+    return card_text, keyboard
+
+
 def _escape_markdown_text(text: str) -> str:
     """Escape Telegram Markdown (v1) special chars for link labels."""
     value = str(text or "")
@@ -390,29 +477,18 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text("🚫 You have been banned for spam.")
         return
 
-    # 构造转发头信息
-    tags = " ".join([f"#{t}" for t in analysis.get("tags", [])])
-    category = analysis.get("category", "general").upper()
-    summary = analysis.get("summary", "No summary")
-
-    sender_info = _build_sender_profile_lines(user)
-    if not sender_info:
-        sender_info = f"👤 **From**: {_escape_markdown_text(user.full_name)} (`{user.id}`)\n"
-
-    header = (
-        f"📨 **Private Message** [{category}]\n"
-        f"{sender_info}"
-        f"🏷 **Tags**: {tags or '—'}\n"
-        f"📝 **Summary**: {summary}\n"
-        f"-----------------------------"
-    )
+    header, header_kb = build_private_service_card(update, analysis)
 
     targets = settings.get_forward_targets()
     for admin_id in targets:
         try:
             # Header
             await context.bot.send_message(
-                chat_id=admin_id, text=header, parse_mode=ParseMode.MARKDOWN
+                chat_id=admin_id,
+                text=header,
+                parse_mode=ParseMode.HTML,
+                reply_markup=header_kb,
+                disable_web_page_preview=True,
             )
             # Forward 原始消息（保留上下文 / 媒体）
             fwd_msg = await context.bot.forward_message(

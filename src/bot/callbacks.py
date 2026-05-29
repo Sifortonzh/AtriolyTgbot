@@ -324,6 +324,42 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("Unknown report action.", show_alert=True)
         return
 
+    if data.startswith("private:"):
+        if not owner:
+            await query.answer("Owner only.", show_alert=True)
+            return
+
+        parts = data.split(":")
+        if len(parts) < 4:
+            await query.answer("Invalid private action.", show_alert=True)
+            return
+
+        action = parts[1]
+        target_user_id = parts[2]
+
+        if action == "reply_guide":
+            await query.answer(
+                "Reply to this forwarded message, and Wanatring will relay your reply to the original user.",
+                show_alert=True,
+            )
+            return
+
+        if action == "blacklist":
+            try:
+                uid = int(target_user_id)
+                blacklist.ban_user(uid)
+                await query.answer("User blacklisted.", show_alert=True)
+            except Exception:
+                await query.answer("Blacklist placeholder. Persistence will be wired later.", show_alert=True)
+            return
+
+        if action == "resolved":
+            await query.answer("Marked as resolved placeholder. Persistence will be added later.", show_alert=True)
+            return
+
+        await query.answer("Unknown private action.", show_alert=True)
+        return
+
     await query.answer()
 
     if data == "menu:home":
