@@ -18,6 +18,10 @@ Wanatring is intended to be a compact personal operations layer: it watches nois
 - Owner Task Assistant: parses natural-language task instructions and manages owner-side tasks.
 - Private Reply Bridge: user DMs are forwarded to the owner, and owner replies can be bridged back to the original user.
 - Sender Profile Links: forwarded/admin messages can include clickable sender profile links when enabled.
+- OpenAI-first Fast Fallback: OpenAI remains the default provider; if the current server environment cannot reach it, the same request quickly falls back to DeepSeek.
+- Chinese Spam Heuristics: obvious gambling, registration-bonus, promo, and multi-link ads are blocked before AI analysis.
+- Admin Report Card 2.0: group membership radar alerts are forwarded as actionable cards with sender links and owner controls.
+- Private Service Desk 2.0: non-owner private messages are always routed into the forwarding service desk flow and receive a warmer delivery confirmation.
 - Owner Permission Boundary: sensitive operations are restricted to configured owner IDs.
 
 ## Architecture Overview
@@ -83,7 +87,7 @@ ENABLE_SENDER_PROFILE_LINK=true
 
 Notes:
 
-- Provider availability depends on API key configuration, account status, model availability, and server network connectivity.
+- Provider availability depends on API key configuration, account status, model availability, and server network connectivity. Wanatring currently follows an **OpenAI-first** strategy: OpenAI is attempted first by default; if the current environment cannot reach OpenAI, the same request quickly falls back to DeepSeek and preserves diagnostic fields such as `_provider_used`, `_provider_fallback_used`, and `_provider_failures`.
 - `openai_compatible` requires an API key, a Base URL, and a compatible model name.
 - Runtime Provider switching does not modify `.env`; it only writes a runtime override file.
 
@@ -112,6 +116,8 @@ The Provider panel shows:
 
 Switching Provider at runtime does not restart Docker and does not edit `.env`. If the override is cleared, Wanatring falls back to the default `.env` configuration.
 
+For normal automatic operation, Wanatring keeps OpenAI as the preferred provider. DeepSeek is used as a per-request fallback only when the active environment cannot complete the OpenAI call.
+
 ## Runtime Override Mechanism
 
 Runtime override file:
@@ -134,6 +140,52 @@ Key behaviors:
 - Does not expose API keys in Telegram.
 
 If no override exists, the system automatically uses `.env` defaults.
+
+## Private Service Desk
+
+Wanatring can serve as a private-message service desk for non-owner users.
+
+1. A non-owner user sends a private message to the bot.
+2. Wanatring always routes that user into the **Forward / Service Desk** flow, regardless of any previously stored chat mode.
+3. The bot analyzes, categorizes, or summarizes the message and forwards a private admin card to the owner.
+4. The sender receives a warm delivery confirmation instead of an automatic AI chat reply.
+5. The owner can reply to the forwarded message inside Telegram.
+6. Wanatring relays the owner reply back to the original user.
+
+Current private admin cards include:
+
+```text
+📨 Private Message
+👤 Sender: clickable profile
+🆔 User ID: xxx
+🏷 Category: membership / support / billing / general / spam
+🧠 Priority: normal / high / urgent
+📝 Summary: ...
+💬 Message: ...
+```
+
+Available private-card actions include `↩️ Reply Guide`, `👁 View Sender`, `🚫 Blacklist`, and `✅ Mark Resolved`.
+
+## Admin Report Card 2.0
+
+When the group radar detects a valid streaming membership opportunity, Wanatring forwards it to the owner as an actionable report card instead of a plain message.
+
+Typical card fields include:
+
+```text
+💠 Verified Opportunity
+🎬 Platform: Netflix
+💰 Price: ¥25 / month
+🧭 Intent: Offer
+⚠️ Risk: 35 / 100
+📊 Confidence: 0.82
+📝 Summary: ...
+👤 Sender: clickable profile
+🆔 User ID: xxx
+🔗 Original Message: Open / unavailable
+```
+
+The card also supports owner action buttons such as `✅ Save`, `🚫 Blacklist`, `👁 View Sender`, and `📝 Add Note`. Some actions may remain lightweight placeholders until persistence is expanded.
 
 ## Telegram Command List
 
@@ -214,17 +266,19 @@ docker compose up -d --build
 - Sensitive capabilities are Owner-only, including `/ai_provider`, blacklist/whitelist controls, and task overview controls.
 - Runtime Provider switching does not expose API keys in Telegram messages.
 - Sender profile links are controlled by `ENABLE_SENDER_PROFILE_LINK` and can be disabled when needed.
+- Non-owner private users are forced into the forwarding service desk flow; automatic AI chat mode is reserved for owner/admin users.
+- Chinese gambling, registration-bonus, and multi-link promotional messages are filtered before AI calls where possible.
 - External AI Provider availability depends on key permissions, network environment, model availability, and provider uptime.
 
 ## Roadmap
 
-- Add Provider health and error-rate observability.
-- Add a test/confirmation mode before applying Provider switching.
-- Improve group governance strategy templates.
-- Upgrade optional persistence backend from JSON to database storage.
-- Expand Inline Console analytics views.
-- Improve membership radar cards and owner reports.
-- Add screenshot-backed documentation.
+- Reply Bridge 2.0: add clear delivery confirmation and failure feedback for owner replies.
+- Private Contact Memory: keep lightweight contact profiles and interaction history for private users.
+- Quick Reply: add reusable reply buttons for the private service desk.
+- Spam Log: record recently blocked heuristic spam and the matched reasons.
+- Provider Diagnostics: expose clearer OpenAI / DeepSeek connectivity, fallback reason, and latency information.
+- Atrioly Web Dashboard or Mini Admin Panel.
+- Screenshot-backed bilingual documentation.
 
 ## License
 

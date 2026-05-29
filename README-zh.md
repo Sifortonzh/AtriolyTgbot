@@ -33,6 +33,10 @@ Wanatring 面向真实自部署场景：足够轻，可以跑在普通 VPS 上�
 - **统一 Provider Router**：OpenAI、DeepSeek、Anthropic / Claude、OpenAI-compatible 共用同一套 AI 调用层。
 - **结构化雷达输出**：`/probe <文本>` 会返回标准化的雷达分析结果，方便调试。
 - **发信人主页链接**：转发 / 管理员报告中可附带可点击的发信人主页链接。
+- **OpenAI-first 快速兜底**：默认优先使用 OpenAI；当前环境不可达时，按请求快速 fallback 到 DeepSeek。
+- **中文广告硬拦截**：通过正则与多链接密度规则，优先拦截博彩、注册送、网广、推广等明显垃圾信息。
+- **Admin Report Card 2.0**：群组雷达命中后，以可操作卡片转发给 Owner，支持查看发信人、黑名单、备注等按钮入口。
+- **Private Service Desk 2.0**：非 Owner 私聊默认进入转发服务台，并向用户返回更温和的送达确认。
 
 ---
 
@@ -133,7 +137,7 @@ CHAT_MODEL=gpt-4o
 VISION_MODEL=gpt-4o
 ```
 
-Provider 是否可用取决于 API Key、账号状态、服务器网络与模型可用性。如果服务器无法连接当前 Provider，部分雷达流程可能会退回到启发式 fallback 判断。
+Provider 是否可用取决于 API Key、账号状态、服务器网络与模型可用性。当前策略为 **OpenAI-first**：默认优先尝试 OpenAI；当当前服务器环境无法连接 OpenAI 时，会在本次请求内快速 fallback 到 DeepSeek，并在结果中保留 `_provider_used`、`_provider_fallback_used` 与 `_provider_failures` 等诊断字段。若所有 Provider 都不可用，部分雷达流程会退回到启发式 fallback 判断。
 
 ---
 
@@ -161,16 +165,31 @@ Provider 是否可用取决于 API Key、账号状态、服务器网络与模型
 
 Wanatring 可以充当私聊消息桥：
 
-1. 用户私聊 Bot。
-2. Bot 对消息进行分析、分类或摘要。
-3. 处理后的消息转发给 Owner。
-4. Owner 在 Telegram 中直接回复被转发的消息。
-5. Wanatring 将回复回传给原用户，Owner 的工作流仍然停留在 Telegram 内。
+1. 非 Owner 用户私聊 Bot。
+2. Wanatring 默认强制进入 **Forward / Service Desk** 流程，不会把普通用户误判为 Chat 模式。
+3. Bot 对消息进行分析、分类或摘要，并生成私聊服务台卡片转发给 Owner。
+4. 用户会收到送达确认，例如「消息已悄悄递给主人啦」。
+5. Owner 在 Telegram 中直接回复被转发的消息。
+6. Wanatring 将回复回传给原用户，Owner 的工作流仍然停留在 Telegram 内。
 
 当 `ENABLE_SENDER_PROFILE_LINK=true` 时，转发 / 管理员报告中可以附带发信人的可点击主页链接。
 
 - 有用户名的用户：使用 `https://t.me/{username}`。
 - 没有用户名的用户：使用 `tg://user?id={user_id}`，具体表现取决于 Telegram 客户端支持。
+
+当前私聊卡片支持：
+
+```text
+📨 Private Message
+👤 Sender: clickable profile
+🆔 User ID: xxx
+🏷 Category: membership / support / billing / general / spam
+🧠 Priority: normal / high / urgent
+📝 Summary: ...
+💬 Message: ...
+```
+
+卡片按钮包括：`↩️ Reply Guide`、`👁 View Sender`、`🚫 Blacklist`、`✅ Mark Resolved`。
 
 ---
 
@@ -346,7 +365,7 @@ ping - 检查机器人在线状态
 ## 🛡️ 反垃圾逻辑流
 
 1. **入站消息** → 黑名单中间件检查发送者是否已被封禁。
-2. **启发式安全检查** → 明显的垃圾、诈骗、推广模式会被提前丢弃。
+2. **启发式安全检查** → 明显的垃圾、诈骗、推广、中文博彩广告、多链接网广内容会被提前丢弃。
 3. **关联性触发** → 与会员 / 合租相关的消息进入雷达分析。
 4. **AI 分析** → 模棱两可的消息交给当前 Provider 进行语义判断。
 5. **动作执行** → 有效信号转发给 Owner，无效噪声忽略，垃圾内容警告或封禁。
@@ -379,11 +398,11 @@ docs/screenshots/task-summary.png
 
 ## 🗺 Roadmap
 
-- 更清晰的 Provider 健康诊断与错误原因展示。
-- Provider failover 链路，例如 OpenAI → DeepSeek → heuristic fallback。
-- 更精致的合租机会卡片与管理员报告。
-- 针对不同群组场景的细粒度审核策略。
-- 从 JSON 文件升级到可选数据库后端。
+- Reply Bridge 2.0：为 Owner 回复增加明确的送达确认与失败提示。
+- Private Contact Memory：为私聊用户建立轻量联系人档案与历史记录。
+- Quick Reply：为私聊服务台增加常用快捷回复按钮。
+- Spam Log：记录最近被启发式规则拦截的广告与命中原因。
+- Provider 诊断：更清晰地展示 OpenAI / DeepSeek 的连接状态、fallback 原因与耗时。
 - Atrioly 操作台 Web Dashboard 或 Mini Admin Panel。
 - 更完整的中英文控制台文案与截图文档。
 
