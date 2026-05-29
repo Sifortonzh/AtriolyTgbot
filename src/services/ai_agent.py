@@ -149,6 +149,14 @@ class AIAgent:
     def _resolve_provider(self) -> str:
         return self._normalize_provider(ai_runtime.effective_provider())
 
+    def _resolve_provider_chain(self) -> list[str]:
+        primary = self._resolve_provider()
+        chain = settings.get_ai_provider_fallback_chain(primary)
+        if chain:
+            return chain
+        # Preserve primary even when not ready, so callers can still receive explicit config errors.
+        return [primary]
+
     def _get_openai_like_client(self, provider: str) -> OpenAI | None:
         api_key = settings.get_api_key_for_provider(provider)
         base_url = settings.get_base_url_for_provider(provider)
@@ -176,6 +184,73 @@ class AIAgent:
         if provider == "anthropic":
             return self._get_anthropic_client(provider) is not None
         return self._get_openai_like_client(provider) is not None
+
+    async def _call_gpt_for_provider(
+        self,
+        provider: str,
+        model_name: str,
+        system_prompt: str,
+        safe_user_text: str,
+        retries: int,
+        delay_seconds: float,
+        started: float,
+    ) -> Dict[str, Any]:
+        for attempt in range(retries + 1):
+            try:
+                if provider == "anthropic":
+                    anthropic_client = self._get_anthropic_client(provider)
+                    if not anthropic_client:
+                        return {"error": "Anthropic API key not configured"}
+                    response = anthropic_client.messages.create(
+                        model=model_name,
+                        max_tokens=1200,
+                        temperature=settings.AI_TEMPERATURE,
+                        system=system_prompt,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"{safe_user_text}\n\nReturn exactly one valid JSON object. Do not use Markdown.",
+                            }
+                        ],
+                    )
+                    text_content = "".join(
+                        block.text for block in response.content if getattr(block, "type", "") == "text"
+                    )
+                    result = self._extract_json_object(text_content)
+                else:
+                    openai_client = self._get_openai_like_client(provider)
+                    if not openai_client:
+                        return {"error": "AI provider credentials not configured"}
+                    response = openai_client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": safe_user_text},
+                        ],
+                        temperature=settings.AI_TEMPERATURE,
+                        response_format={"type": "json_object"},
+                    )
+                    content = response.choices[0].message.content or ""
+                    result = self._extract_json_object(content)
+
+                result.setdefault("_provider", provider)
+                result.setdefault("_model", model_name)
+                result.setdefault("_cached", False)
+                result.setdefault("_elapsed_ms", int((time.perf_counter() - started) * 1000))
+                return result
+            except Exception as exc:  # noqa: BLE001
+                log.warning("AI call failed provider=%s (attempt %s/%s): %s", provider, attempt + 1, retries + 1, exc)
+                if attempt >= retries:
+                    return {
+                        "error": str(exc),
+                        "_provider": provider,
+                        "_model": model_name,
+                        "_cached": False,
+                        "_elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    }
+                await asyncio.sleep(delay_seconds * (attempt + 1))
+
+        return {"error": "Unknown AI error"}
 
     def _cache_get(self, cache_key: str) -> Any | None:
         ttl = max(0, settings.AI_CACHE_TTL_SECONDS)
@@ -243,13 +318,14 @@ class AIAgent:
         *,
         task: str = "radar",
     ) -> Dict[str, Any]:
-        """Call current provider and parse JSON."""
+        """Call providers with failover chain and parse JSON."""
         model_name = self._model_for_task(task, model)
-        provider = self._resolve_provider()
+        provider_chain = self._resolve_provider_chain()
+        primary_provider = provider_chain[0]
         safe_user_text = self._safe_text(user_text)
         cache_key = json.dumps(
             {
-                "provider": provider,
+                "providers": provider_chain,
                 "model": model_name,
                 "system": system_prompt,
                 "user": safe_user_text,
@@ -265,64 +341,41 @@ class AIAgent:
         retries = max(0, settings.AI_RETRY_TIMES)
         delay_seconds = 0.6
         started = time.perf_counter()
+        provider_failures: list[str] = []
 
-        for attempt in range(retries + 1):
-            try:
-                if provider == "anthropic":
-                    anthropic_client = self._get_anthropic_client(provider)
-                    if not anthropic_client:
-                        return {"error": "Anthropic API key not configured"}
-                    response = anthropic_client.messages.create(
-                        model=model_name,
-                        max_tokens=1200,
-                        temperature=settings.AI_TEMPERATURE,
-                        system=system_prompt,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": f"{safe_user_text}\n\nReturn exactly one valid JSON object. Do not use Markdown.",
-                            }
-                        ],
-                    )
-                    text_content = "".join(
-                        block.text for block in response.content if getattr(block, "type", "") == "text"
-                    )
-                    result = self._extract_json_object(text_content)
-                else:
-                    openai_client = self._get_openai_like_client(provider)
-                    if not openai_client:
-                        return {"error": "AI provider credentials not configured"}
-                    response = openai_client.chat.completions.create(
-                        model=model_name,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": safe_user_text},
-                        ],
-                        temperature=settings.AI_TEMPERATURE,
-                        response_format={"type": "json_object"},
-                    )
-                    content = response.choices[0].message.content or ""
-                    result = self._extract_json_object(content)
+        for provider in provider_chain:
+            result = await self._call_gpt_for_provider(
+                provider,
+                model_name,
+                system_prompt,
+                safe_user_text,
+                retries,
+                delay_seconds,
+                started,
+            )
 
-                result.setdefault("_provider", provider)
-                result.setdefault("_model", model_name)
-                result.setdefault("_cached", False)
-                result.setdefault("_elapsed_ms", int((time.perf_counter() - started) * 1000))
-                self._cache_set(cache_key, result)
-                return result
-            except Exception as exc:  # noqa: BLE001
-                log.warning("AI call failed (attempt %s/%s): %s", attempt + 1, retries + 1, exc)
-                if attempt >= retries:
-                    return {
-                        "error": str(exc),
-                        "_provider": provider,
-                        "_model": model_name,
-                        "_cached": False,
-                        "_elapsed_ms": int((time.perf_counter() - started) * 1000),
-                    }
-                await asyncio.sleep(delay_seconds * (attempt + 1))
+            if "error" in result:
+                reason = str(result.get("error") or "Unknown error")
+                provider_failures.append(f"{provider}: {reason}")
+                log.warning("AI provider failed provider=%s reason=%s", provider, reason)
+                continue
 
-        return {"error": "Unknown AI error"}
+            result["_provider_used"] = provider
+            result["_provider_fallback_used"] = provider != primary_provider
+            result["_provider_failures"] = provider_failures
+            self._cache_set(cache_key, result)
+            return result
+
+        return {
+            "error": provider_failures[-1] if provider_failures else "Unknown AI error",
+            "_provider": primary_provider,
+            "_model": model_name,
+            "_cached": False,
+            "_elapsed_ms": int((time.perf_counter() - started) * 1000),
+            "_provider_used": None,
+            "_provider_fallback_used": False,
+            "_provider_failures": provider_failures,
+        }
 
     async def _call_text(
         self,
@@ -334,11 +387,11 @@ class AIAgent:
         task: str = "chat",
     ) -> str:
         model_name = self._model_for_task(task, model)
-        provider = self._resolve_provider()
+        provider_chain = self._resolve_provider_chain()
         safe_user_text = self._safe_text(user_text)
         cache_key = json.dumps(
             {
-                "provider": provider,
+                "providers": provider_chain,
                 "model": model_name,
                 "system": system_prompt,
                 "user": safe_user_text,
@@ -354,43 +407,50 @@ class AIAgent:
         retries = max(0, settings.AI_RETRY_TIMES)
         delay_seconds = 0.6
 
-        for attempt in range(retries + 1):
-            try:
-                if provider == "anthropic":
-                    anthropic_client = self._get_anthropic_client(provider)
-                    if not anthropic_client:
-                        return ""
-                    response = anthropic_client.messages.create(
-                        model=model_name,
-                        max_tokens=max_tokens,
-                        temperature=settings.AI_TEMPERATURE,
-                        system=system_prompt,
-                        messages=[{"role": "user", "content": safe_user_text}],
-                    )
-                    content = "".join(
-                        block.text for block in response.content if getattr(block, "type", "") == "text"
-                    ).strip()
-                else:
-                    openai_client = self._get_openai_like_client(provider)
-                    if not openai_client:
-                        return ""
-                    response = openai_client.chat.completions.create(
-                        model=model_name,
-                        temperature=settings.AI_TEMPERATURE,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": safe_user_text},
-                        ],
-                    )
-                    content = (response.choices[0].message.content or "").strip()
+        for provider in provider_chain:
+            for attempt in range(retries + 1):
+                try:
+                    if provider == "anthropic":
+                        anthropic_client = self._get_anthropic_client(provider)
+                        if not anthropic_client:
+                            break
+                        response = anthropic_client.messages.create(
+                            model=model_name,
+                            max_tokens=max_tokens,
+                            temperature=settings.AI_TEMPERATURE,
+                            system=system_prompt,
+                            messages=[{"role": "user", "content": safe_user_text}],
+                        )
+                        content = "".join(
+                            block.text for block in response.content if getattr(block, "type", "") == "text"
+                        ).strip()
+                    else:
+                        openai_client = self._get_openai_like_client(provider)
+                        if not openai_client:
+                            break
+                        response = openai_client.chat.completions.create(
+                            model=model_name,
+                            temperature=settings.AI_TEMPERATURE,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": safe_user_text},
+                            ],
+                        )
+                        content = (response.choices[0].message.content or "").strip()
 
-                self._cache_set(cache_key, content)
-                return content
-            except Exception as exc:  # noqa: BLE001
-                log.warning("AI text call failed (attempt %s/%s): %s", attempt + 1, retries + 1, exc)
-                if attempt >= retries:
-                    return ""
-                await asyncio.sleep(delay_seconds * (attempt + 1))
+                    self._cache_set(cache_key, content)
+                    return content
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "AI text call failed provider=%s (attempt %s/%s): %s",
+                        provider,
+                        attempt + 1,
+                        retries + 1,
+                        exc,
+                    )
+                    if attempt >= retries:
+                        break
+                    await asyncio.sleep(delay_seconds * (attempt + 1))
 
         return ""
 
@@ -542,8 +602,9 @@ class AIAgent:
         """
         text = self._safe_text(text)
 
-        provider = self._resolve_provider()
-        has_client = self._has_provider_client(provider)
+        provider_chain = self._resolve_provider_chain()
+        provider = provider_chain[0]
+        has_client = any(self._has_provider_client(item) for item in provider_chain)
         if not has_client:
             return self._fallback_group_analysis(text, "No AI credentials configured")
 
@@ -593,6 +654,9 @@ class AIAgent:
         merged["_model"] = result.get("_model", self._model_for_task("radar"))
         merged["_cached"] = result.get("_cached", False)
         merged["_elapsed_ms"] = result.get("_elapsed_ms")
+        merged["_provider_used"] = result.get("_provider_used")
+        merged["_provider_fallback_used"] = result.get("_provider_fallback_used", False)
+        merged["_provider_failures"] = result.get("_provider_failures", [])
         return merged
 
     def _fallback_group_analysis(self, text: str, error: str | None = None) -> Dict[str, Any]:
@@ -621,8 +685,8 @@ class AIAgent:
     # ========== Private Logic (DM 分类 / 标签 / Summary) ==========
 
     async def analyze_private_message(self, text: str) -> Dict[str, Any]:
-        provider = self._resolve_provider()
-        has_client = self._has_provider_client(provider)
+        provider_chain = self._resolve_provider_chain()
+        has_client = any(self._has_provider_client(item) for item in provider_chain)
         if not has_client:
             return {
                 "is_spam": False,
@@ -764,17 +828,17 @@ class AIAgent:
     # ========== Image Analysis (Vision) ==========
 
     async def analyze_image(self, image_path: str, caption: str | None = None) -> Dict[str, Any]:
-        provider = self._resolve_provider()
-        if provider == "anthropic":
-            return {
-                "summary": "当前 Anthropic Vision 通道尚未启用。",
-                "tags": [],
-                "risk": "unknown",
-                "error": "Anthropic vision is not implemented in this bot yet.",
-            }
+        selected_provider: str | None = None
+        openai_client = None
+        for provider in self._resolve_provider_chain():
+            if provider == "anthropic":
+                continue
+            openai_client = self._get_openai_like_client(provider)
+            if openai_client:
+                selected_provider = provider
+                break
 
-        openai_client = self._get_openai_like_client(provider)
-        if not openai_client:
+        if not openai_client or not selected_provider:
             return {"error": "Vision currently requires an OpenAI-compatible provider"}
 
         try:
@@ -833,8 +897,8 @@ class AIAgent:
     # ========== Simple Chat Reply (for Chat Mode) ==========
 
     async def chat_reply(self, user_text: str) -> str:
-        provider = self._resolve_provider()
-        has_client = self._has_provider_client(provider)
+        provider_chain = self._resolve_provider_chain()
+        has_client = any(self._has_provider_client(item) for item in provider_chain)
         if not has_client:
             return "⚠️ 当前未配置 AI Provider API Key，无法进行 AI 对话。"
 

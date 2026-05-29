@@ -18,8 +18,10 @@ from src.bot.callbacks import (
 )
 from src.config import settings
 from src.services.ai_agent import agent
+from src.services import ai_runtime
 from src.services.blacklist_manager import blacklist
 from src.services.membership import manager
+from src.services.safety import safety_filter
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager
 
@@ -153,6 +155,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     summary = settings.public_runtime_summary()
+    runtime_summary = ai_runtime.summary()
+    effective_provider = runtime_summary.get("provider")
+    fallback_chain = runtime_summary.get("fallback_chain") or []
+    fallback_chain_text = " -> ".join(fallback_chain) if fallback_chain else "N/A"
 
     text = (
         "🟢 **Atrioly System Status**\n"
@@ -176,6 +182,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"• Anniversaries: `{annis}`\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "**Runtime**\n"
+        f"• Default Provider: `{settings.AI_PROVIDER}`\n"
+        f"• Runtime Provider: `{runtime_summary.get('runtime', {}).get('provider') or 'N/A'}`\n"
+        f"• Effective Provider: `{effective_provider}`\n"
+        f"• Fallback Chain: `{fallback_chain_text}`\n"
         f"• Owners: `{summary['owners']}`\n"
         f"• Forward Targets: `{summary['forward_targets']}`\n"
         f"• Data Dir: `{summary['data_dir']}`\n"
@@ -274,6 +284,33 @@ async def cmd_probe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if len(text) > settings.MAX_MESSAGE_LENGTH:
         text = text[: settings.MAX_MESSAGE_LENGTH]
+
+    spam_hit, spam_reason = safety_filter.check_obvious_spam(text)
+    if spam_hit:
+        result = {
+            "is_spam": True,
+            "spam_reason": spam_reason,
+            "is_membership": False,
+            "intent": "spam",
+            "platform": None,
+            "price": None,
+            "currency": None,
+            "region": None,
+            "risk_score": 100,
+            "confidence": 1.0,
+            "summary": text[:160] or "Heuristic spam hit.",
+            "reason": spam_reason,
+            "action": "drop",
+            "_provider_used": "heuristic",
+            "_provider_fallback_used": False,
+            "_provider_failures": [],
+        }
+        await safe_reply(
+            update,
+            f"```json\n{format_json(result)}\n```",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
 
     try:
         result = await agent.analyze_message(text)
