@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Atrioly · Wanatring Control Panel{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Atrioly Operations</p>
+          <h1>Wanatring Control Panel</h1>
+        </div>
+        <nav class="nav">
+          <a class="{% if path == '/' %}active{% endif %}" href="/">Dashboard</a>
+          <a class="{% if path == '/inbox' %}active{% endif %}" href="/inbox">Inbox</a>
+          <a class="{% if path == '/contacts' %}active{% endif %}" href="/contacts">Contacts</a>
+          <a class="{% if path == '/runtime' %}active{% endif %}" href="/runtime">Runtime</a>
+          <a href="/logout">Logout</a>
+        </nav>
+      </header>
+
+      {% if token_warning %}
+        <div class="banner warning">{{ token_warning }}</div>
+      {% endif %}
+
+      {% if warnings %}
+        {% for warning in warnings %}
+          <div class="banner warning">{{ warning }}</div>
+        {% endfor %}
+      {% endif %}
+
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </body>
+</html>

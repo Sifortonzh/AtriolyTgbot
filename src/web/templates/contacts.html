@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="panel">
+    <div class="section-title">
+      <h2>Private Contacts</h2>
+      <span>{{ contacts|length }} contacts</span>
+    </div>
+    {% if not contacts %}
+      <p class="empty">No private contacts found.</p>
+    {% else %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Username</th>
+              <th>User ID</th>
+              <th>First Seen</th>
+              <th>Last Seen</th>
+              <th>Messages</th>
+              <th>Last Category</th>
+              <th>Last Priority</th>
+              <th>Last Summary</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for contact in contacts %}
+              <tr>
+                <td><strong>{{ contact.name or "Unknown" }}</strong></td>
+                <td>@{{ contact.username or "no_username" }}</td>
+                <td>{{ contact.user_id }}</td>
+                <td>{{ contact.first_seen or "—" }}</td>
+                <td>{{ contact.last_seen or "—" }}</td>
+                <td>{{ contact.message_count or 0 }}</td>
+                <td>{{ contact.last_category or "—" }}</td>
+                <td><span class="badge priority-{{ contact.last_priority or 'normal' }}">{{ contact.last_priority or "normal" }}</span></td>
+                <td>{{ contact.last_summary or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

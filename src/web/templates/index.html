@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="grid cards">
+    <article class="card">
+      <span class="label">Dashboard</span>
+      <strong>Online</strong>
+      <p>v4.0-alpha.1</p>
+    </article>
+    <article class="card">
+      <span class="label">Data Dir</span>
+      <strong class="small">{{ data_dir }}</strong>
+      <p>Shared with the Telegram bot.</p>
+    </article>
+    <article class="card">
+      <span class="label">Contacts</span>
+      <strong>{{ contacts_count }}</strong>
+      <p>Private contact profiles.</p>
+    </article>
+    <article class="card">
+      <span class="label">Open Threads</span>
+      <strong>{{ open_threads_count }}</strong>
+      <p>Waiting for owner handling.</p>
+    </article>
+    <article class="card">
+      <span class="label">Resolved Threads</span>
+      <strong>{{ resolved_threads_count }}</strong>
+      <p>Marked as processed.</p>
+    </article>
+    <article class="card">
+      <span class="label">Total Threads</span>
+      <strong>{{ total_threads_count }}</strong>
+      <p>Stored private workflow records.</p>
+    </article>
+    <article class="card">
+      <span class="label">AI Runtime</span>
+      <strong>{{ "Present" if runtime_exists else "Default" }}</strong>
+      <p>{{ runtime_provider or "No runtime override file." }}</p>
+    </article>
+  </section>
+
+  <section class="panel">
+    <h2>Quick Links</h2>
+    <div class="actions">
+      <a class="button" href="/inbox">Inbox</a>
+      <a class="button" href="/contacts">Contacts</a>
+      <a class="button" href="/runtime">Runtime</a>
+    </div>
+  </section>
+{% endblock %}

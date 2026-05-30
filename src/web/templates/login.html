@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Login · Wanatring Control Panel{% endblock %}
+{% block content %}
+  <section class="panel login-panel">
+    <p class="eyebrow">Protected Access</p>
+    <h2>Dashboard Login</h2>
+    {% if not token_configured %}
+      <p class="muted">Dashboard token is not configured. Access is open for local development.</p>
+      <a class="button" href="/">Open Dashboard</a>
+    {% else %}
+      <p class="muted">Enter your dashboard token to unlock private workflow data.</p>
+      {% if error %}
+        <div class="banner danger">{{ error }}</div>
+      {% endif %}
+      <form class="login-form" action="/login" method="get">
+        <label for="token">Dashboard token</label>
+        <input id="token" name="token" type="password" autocomplete="current-password" required>
+        <button type="submit">Unlock</button>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}

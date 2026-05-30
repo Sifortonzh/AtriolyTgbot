@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="panel">
+    <div class="section-title">
+      <h2>Private Inbox</h2>
+      <span>{{ threads|length }} threads</span>
+    </div>
+    {% if not threads %}
+      <p class="empty">No private threads found.</p>
+    {% else %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>User</th>
+              <th>Category</th>
+              <th>Priority</th>
+              <th>Summary</th>
+              <th>Preview</th>
+              <th>Updated</th>
+              <th>Resolved</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for thread in threads %}
+              <tr>
+                <td><span class="badge status-{{ thread.status or 'unknown' }}">{{ thread.status or "unknown" }}</span></td>
+                <td>
+                  <strong>{{ thread.user_name or "Unknown" }}</strong>
+                  <small>@{{ thread.username or "no_username" }} · {{ thread.user_id }}</small>
+                </td>
+                <td>{{ thread.category or "general" }}</td>
+                <td><span class="badge priority-{{ thread.priority or 'normal' }}">{{ thread.priority or "normal" }}</span></td>
+                <td>{{ thread.summary or "—" }}</td>
+                <td>{{ thread.message_preview or "—" }}</td>
+                <td>{{ thread.updated_at or "—" }}</td>
+                <td>{{ thread.resolved_at or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+{% endblock %}

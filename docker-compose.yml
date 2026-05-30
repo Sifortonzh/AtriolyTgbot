@@ -22,3 +22,28 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  atrioly-dashboard:
+    container_name: atrioly_dashboard
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: uvicorn src.web.app:app --host 0.0.0.0 --port 8787
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8787/health', timeout=5).read()\nprint('ok')\nPY"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

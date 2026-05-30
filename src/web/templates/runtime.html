@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="grid cards">
+    {% for key, value in safe_config.items() %}
+      <article class="card">
+        <span class="label">{{ key.replace("_", " ") }}</span>
+        <strong class="small">{{ value if value is not none else "—" }}</strong>
+      </article>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <div class="section-title">
+      <h2>AI Runtime JSON</h2>
+      <span>{{ "present" if runtime_exists else "missing" }}</span>
+    </div>
+    <pre>{{ runtime_json_pretty }}</pre>
+  </section>
+{% endblock %}
