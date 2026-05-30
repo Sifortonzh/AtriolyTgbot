@@ -12,10 +12,18 @@ from src.config import settings
 from src.services import ai_runtime
 from src.services.blacklist_manager import blacklist
 from src.services.membership import manager
+from src.services.private_threads import private_threads
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager
 
 log = logging.getLogger(__name__)
+
+PRIVATE_QUICK_REPLIES = {
+    "ask_details": "你好，请问你想咨询哪个平台？我可以先帮你确认一下具体情况。🌿",
+    "send_price": "目前价格需要根据平台和周期确认。你可以先告诉我想咨询 Netflix、Disney+、Spotify 还是其他平台。💰",
+    "check_availability": "我先帮你确认一下是否还有可用位置，稍后回复你。📦",
+    "polite_reject": "抱歉，目前这边暂时没有合适的位置或方案。感谢你的理解～ 🙏",
+}
 
 
 def current_user_id(update: Update) -> int | None:
@@ -141,6 +149,7 @@ def render_help_text(owner: bool) -> str:
         "`/ai_test <text>` - Legacy alias for /probe\n"
         "`/blacklist <uid>` - Ban a user\n"
         "`/whitelist <uid>` - Unban a user\n"
+        "`/inbox` - Show open private threads\n"
         "`/listall` - List all stored tasks\n"
     )
 
@@ -208,6 +217,7 @@ def render_owner_tools_text() -> str:
         "`/probe <text>`\n"
         "`/blacklist <uid>`\n"
         "`/whitelist <uid>`\n"
+        "`/inbox`\n"
         "`/listall`"
     )
 
@@ -336,12 +346,45 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         action = parts[1]
         target_user_id = parts[2]
+        owner_message_id = None
+        try:
+            owner_message_id = int(parts[3])
+        except (TypeError, ValueError):
+            owner_message_id = None
 
         if action == "reply_guide":
             await query.answer(
                 "Reply to this forwarded message, and Wanatring will relay your reply to the original user.",
                 show_alert=True,
             )
+            return
+
+        if action in PRIVATE_QUICK_REPLIES:
+            if owner_message_id is None:
+                await query.answer("⚠️ 快捷回复未能送达，可能是用户阻止了 Bot 或记录已过期。", show_alert=True)
+                return
+
+            thread = private_threads.get_by_owner_message_id(owner_message_id)
+            if not thread:
+                await query.answer("⚠️ 快捷回复未能送达，可能是用户阻止了 Bot 或记录已过期。", show_alert=True)
+                return
+
+            try:
+                await context.bot.send_message(
+                    chat_id=int(thread["user_id"]),
+                    text=PRIVATE_QUICK_REPLIES[action],
+                )
+                await query.answer("✅ 快捷回复已发送。", show_alert=True)
+            except Exception as error:  # noqa: BLE001
+                log.error(
+                    "Failed to send private quick reply action=%s owner_message_id=%s user_id=%s: %s",
+                    action,
+                    owner_message_id,
+                    thread.get("user_id"),
+                    error,
+                    exc_info=error,
+                )
+                await query.answer("⚠️ 快捷回复未能送达，可能是用户阻止了 Bot 或记录已过期。", show_alert=True)
             return
 
         if action == "blacklist":
@@ -354,7 +397,17 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         if action == "resolved":
-            await query.answer("Marked as resolved placeholder. Persistence will be added later.", show_alert=True)
+            if owner_message_id is None:
+                await query.answer("⚠️ 没找到对应的私聊记录，可能已经过期。", show_alert=True)
+                return
+
+            thread = private_threads.get_by_owner_message_id(owner_message_id)
+            if not thread:
+                await query.answer("⚠️ 没找到对应的私聊记录，可能已经过期。", show_alert=True)
+                return
+
+            private_threads.mark_resolved(str(thread["thread_id"]))
+            await query.answer("✅ 已标记为已处理。", show_alert=True)
             return
 
         await query.answer("Unknown private action.", show_alert=True)

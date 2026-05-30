@@ -21,6 +21,7 @@ from src.services.ai_agent import agent
 from src.services import ai_runtime
 from src.services.blacklist_manager import blacklist
 from src.services.membership import manager
+from src.services.private_threads import private_threads
 from src.services.safety import safety_filter
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager
@@ -126,6 +127,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "`/ai_test <text>` - Legacy alias for /probe\n"
         "`/blacklist <uid>` - Ban a user\n"
         "`/whitelist <uid>` - Unban a user\n"
+        "`/inbox` - Show open private threads\n"
         "`/listall` - List all stored tasks\n"
     )
 
@@ -361,6 +363,43 @@ async def cmd_ai_provider(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         render_ai_provider_text(),
         reply_markup=build_ai_provider_keyboard(),
     )
+
+
+async def cmd_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update, "inbox"):
+        return
+
+    try:
+        threads = private_threads.open_threads(limit=10)
+    except Exception as error:  # noqa: BLE001
+        log.error("Failed to load private inbox: %s", error, exc_info=error)
+        await safe_reply(update, "⚠️ Failed to load private inbox.", parse_mode=None)
+        return
+
+    if not threads:
+        await safe_reply(update, "📭 暂时没有未处理的私聊。", parse_mode=None)
+        return
+
+    lines = ["📥 Private Inbox", ""]
+    for index, item in enumerate(threads, start=1):
+        user_name = str(item.get("user_name") or "Unknown")
+        category = str(item.get("category") or "general")
+        priority = str(item.get("priority") or "normal")
+        summary = str(item.get("summary") or item.get("message_preview") or "No summary")
+        updated = str(item.get("updated_at") or "N/A").replace("T", " ")[:16]
+        user_id = item.get("user_id") or "unknown"
+
+        lines.extend(
+            [
+                f"{index}. {user_name} · {category} · {priority}",
+                f"Summary: {summary}",
+                f"Updated: {updated}",
+                f"User ID: {user_id}",
+                "",
+            ]
+        )
+
+    await safe_reply(update, "\n".join(lines).strip(), parse_mode=None)
 
 
 def _fmt_tags_hash(raw: Any) -> str:

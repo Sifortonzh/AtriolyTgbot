@@ -10,6 +10,8 @@ from src.config import settings
 from src.services.ai_agent import agent
 from src.services.safety import safety_filter
 from src.services.blacklist_manager import blacklist
+from src.services.private_contacts import private_contacts
+from src.services.private_threads import private_threads
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager  # NEW
 
@@ -147,11 +149,10 @@ def _derive_private_priority(category: str, analysis: dict) -> str:
     return "normal"
 
 
-def build_private_service_card(update: Update, analysis: dict) -> tuple[str, InlineKeyboardMarkup]:
+def _private_thread_values(update: Update, analysis: dict) -> dict:
     msg = update.effective_message
     user = update.effective_user
     message_text = (msg.text or "") if msg else ""
-    preview = html.escape(message_text[:800]) if message_text else "(empty)"
 
     category = _normalize_private_category(analysis.get("category"))
     priority = _derive_private_priority(category, analysis)
@@ -159,6 +160,29 @@ def build_private_service_card(update: Update, analysis: dict) -> tuple[str, Inl
     summary_raw = str(analysis.get("summary") or "").strip()
     if not summary_raw:
         summary_raw = message_text[:120] if message_text else "No summary"
+
+    return {
+        "category": category,
+        "priority": priority,
+        "summary_raw": summary_raw,
+        "message_text": message_text,
+    }
+
+
+def build_private_service_card(
+    update: Update,
+    analysis: dict,
+    owner_message_id: int = 0,
+) -> tuple[str, InlineKeyboardMarkup]:
+    msg = update.effective_message
+    user = update.effective_user
+    values = _private_thread_values(update, analysis)
+    message_text = values["message_text"]
+    preview = html.escape(message_text[:800]) if message_text else "(empty)"
+
+    category = values["category"]
+    priority = values["priority"]
+    summary_raw = values["summary_raw"]
     summary = html.escape(summary_raw)
 
     sender_name = user.full_name if user and user.full_name else "Unknown"
@@ -184,12 +208,20 @@ def build_private_service_card(update: Update, analysis: dict) -> tuple[str, Inl
     )
 
     callback_uid = sender_id if sender_id.isdigit() else "0"
-    callback_mid = str(msg.message_id if msg else 0)
+    callback_mid = str(owner_message_id or (msg.message_id if msg else 0))
     keyboard = InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton("↩️ Reply Guide", callback_data=f"private:reply_guide:{callback_uid}:{callback_mid}"),
                 InlineKeyboardButton("👁 View Sender", url=sender_url),
+            ],
+            [
+                InlineKeyboardButton("💬 Ask Details", callback_data=f"private:ask_details:{callback_uid}:{callback_mid}"),
+                InlineKeyboardButton("💰 Send Price", callback_data=f"private:send_price:{callback_uid}:{callback_mid}"),
+            ],
+            [
+                InlineKeyboardButton("📦 Check Availability", callback_data=f"private:check_availability:{callback_uid}:{callback_mid}"),
+                InlineKeyboardButton("🙏 Polite Reject", callback_data=f"private:polite_reject:{callback_uid}:{callback_mid}"),
             ],
             [
                 InlineKeyboardButton("🚫 Blacklist", callback_data=f"private:blacklist:{callback_uid}:{callback_mid}"),
@@ -350,6 +382,13 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 
     # 0. Safety Check
     if safety_filter.is_obvious_spam(text):
+        if user.id not in settings.OWNER_IDS:
+            private_contacts.upsert_from_user(
+                user,
+                category="spam",
+                priority="urgent",
+                summary=text[:120],
+            )
         return
 
     mode = state_manager.get_mode(user.id)
@@ -457,18 +496,20 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
 
     log.info(f"Private message mode for user {user.id}: {mode}")
 
-    # 2.1 Chat 模式：直接用 AI 回复用户，不再转发给管理员
+    # 2.1 Chat 模式：仅 owner 使用；普通私聊用户保持转人工转发。
     if mode == "chat":
-        try:
-            reply_text = await agent.chat_reply(text)
-        except Exception as e:
-            log.error(f"❌ chat_reply failed for user {user.id}: {e}")
-            reply_text = "⚠️ AI 聊天暂时不可用，请稍后再试。"
-        await msg.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN)
-        return
+        log.info("Forcing non-owner private user %s to forward mode.", user.id)
 
     # 2.2 Forward 模式（默认）：先做 AI 分类，再转发给管理员
     analysis = await agent.analyze_private_message(text)
+
+    values = _private_thread_values(update, analysis)
+    private_contacts.upsert_from_user(
+        user,
+        category=values["category"],
+        priority=values["priority"],
+        summary=values["summary_raw"],
+    )
 
     # Spam Enforcement
     if analysis.get("is_spam"):
@@ -477,20 +518,25 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text("🚫 You have been banned for spam.")
         return
 
-    header, header_kb = build_private_service_card(update, analysis)
+    header, _ = build_private_service_card(update, analysis)
 
     targets = settings.get_forward_targets()
     delivered = False
     for admin_id in targets:
         try:
             # Header
-            await context.bot.send_message(
+            header_msg = await context.bot.send_message(
                 chat_id=admin_id,
                 text=header,
                 parse_mode=ParseMode.HTML,
-                reply_markup=header_kb,
                 disable_web_page_preview=True,
             )
+            _, updated_kb = build_private_service_card(update, analysis, owner_message_id=header_msg.message_id)
+            try:
+                await header_msg.edit_reply_markup(reply_markup=updated_kb)
+            except Exception as edit_error:  # noqa: BLE001
+                log.warning("Failed to update private card callback IDs: %s", edit_error)
+
             # Forward 原始消息（保留上下文 / 媒体）
             fwd_msg = await context.bot.forward_message(
                 chat_id=admin_id,
@@ -498,7 +544,19 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 message_id=msg.message_id,
             )
             # 注册回复桥接
+            state_manager.register_forward(header_msg.message_id, user.id)
             state_manager.register_forward(fwd_msg.message_id, user.id)
+            private_threads.add_or_update(
+                user_id=user.id,
+                user_name=user.full_name or "Unknown",
+                username=user.username,
+                category=values["category"],
+                priority=values["priority"],
+                summary=values["summary_raw"],
+                message_preview=values["message_text"],
+                owner_message_id=header_msg.message_id,
+                user_message_id=msg.message_id,
+            )
             delivered = True
 
         except Exception as e:
@@ -537,12 +595,16 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 3. 查找原始发送者
     original_user_id = state_manager.get_original_sender(msg.reply_to_message.message_id)
     if not original_user_id:
-        # 可能回复到了 header 或者非映射消息，忽略
+        await msg.reply_text("⚠️ 这条消息没有关联到有效的私聊用户，无法转发。")
         return
 
     # 4. 回发给原始用户
     try:
         await context.bot.send_message(chat_id=original_user_id, text=msg.text)
-        await msg.reply_text(f"✅ Sent to user `{original_user_id}`")
+        await msg.reply_text("✅ 回复已送达给用户。")
     except Exception as e:
-        await msg.reply_text(f"❌ Failed to send: {e}")
+        log.error("Failed to relay owner reply to user_id=%s: %s", original_user_id, e, exc_info=e)
+        await msg.reply_text(
+            "⚠️ 回复未能送达。\n"
+            "可能原因：用户阻止了 Bot、映射已过期，或这条消息不是有效的私聊转发记录。"
+        )

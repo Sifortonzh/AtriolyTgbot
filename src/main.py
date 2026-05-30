@@ -25,6 +25,7 @@ from src.bot.commands import (
     cmd_ai_test,
     cmd_blacklist,
     cmd_help,
+    cmd_inbox,
     cmd_listall,
     cmd_membership_sharing,
     cmd_mode,
@@ -158,6 +159,7 @@ def register_commands(application: Application[Any, Any, Any, Any, Any, Any]) ->
         "ai_test": cmd_ai_test,
         "ai_provider": cmd_ai_provider,
         "probe": cmd_probe,
+        "inbox": cmd_inbox,
         "listall": cmd_listall,
     }
 
