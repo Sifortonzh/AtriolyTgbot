@@ -31,6 +31,7 @@ from src.bot.commands import (
     cmd_mode,
     cmd_ping,
     cmd_probe,
+    cmd_spamlog,
     cmd_start,
     cmd_status,
     cmd_whitelist,
@@ -160,13 +161,14 @@ def register_commands(application: Application[Any, Any, Any, Any, Any, Any]) ->
         "ai_provider": cmd_ai_provider,
         "probe": cmd_probe,
         "inbox": cmd_inbox,
+        "spamlog": cmd_spamlog,
         "listall": cmd_listall,
     }
 
     for command, handler in command_handlers.items():
         application.add_handler(CommandHandler(command, handler))
 
-    application.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^(menu:|report:|private:)"))
+    application.add_handler(CallbackQueryHandler(handle_menu_callback, pattern=r"^(menu:|report:|private:|spam:)"))
 
 
 def register_message_handlers(application: Application[Any, Any, Any, Any, Any, Any]) -> None:
@@ -192,7 +194,7 @@ def register_message_handlers(application: Application[Any, Any, Any, Any, Any, 
     # Group messages: radar sniffing + spam filtering.
     application.add_handler(
         MessageHandler(
-            filters.ChatType.GROUPS & filters.TEXT,
+            filters.ChatType.GROUPS & (filters.TEXT | filters.PHOTO),
             handle_group_message,
         )
     )

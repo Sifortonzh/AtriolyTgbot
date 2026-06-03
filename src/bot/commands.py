@@ -23,6 +23,7 @@ from src.services.blacklist_manager import blacklist
 from src.services.membership import manager
 from src.services.private_threads import private_threads
 from src.services.safety import safety_filter
+from src.services.spam_events import spam_events
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager
 
@@ -128,6 +129,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "`/blacklist <uid>` - Ban a user\n"
         "`/whitelist <uid>` - Unban a user\n"
         "`/inbox` - Show open private threads\n"
+        "`/spamlog` - Show recent spam blocks\n"
         "`/listall` - List all stored tasks\n"
     )
 
@@ -287,11 +289,15 @@ async def cmd_probe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(text) > settings.MAX_MESSAGE_LENGTH:
         text = text[: settings.MAX_MESSAGE_LENGTH]
 
-    spam_hit, spam_reason = safety_filter.check_obvious_spam(text)
+    spam_result = safety_filter.analyze_spam(text)
+    spam_hit = bool(spam_result.get("is_spam"))
+    spam_reason = spam_result.get("reason")
     if spam_hit:
         result = {
             "is_spam": True,
             "spam_reason": spam_reason,
+            "spam_score": spam_result.get("score"),
+            "spam_signals": spam_result.get("signals"),
             "is_membership": False,
             "intent": "spam",
             "platform": None,
@@ -327,6 +333,45 @@ async def cmd_probe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"```json\n{format_json(result)}\n```",
         parse_mode=ParseMode.MARKDOWN,
     )
+
+
+async def cmd_spamlog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_owner(update, "spamlog"):
+        return
+
+    try:
+        events = spam_events.recent(limit=10)
+    except Exception as error:  # noqa: BLE001
+        log.error("Failed to load spam log: %s", error, exc_info=error)
+        await safe_reply(update, "⚠️ Failed to load spam log.", parse_mode=None)
+        return
+
+    if not events:
+        await safe_reply(update, "🧱 暂时没有垃圾信息拦截记录。", parse_mode=None)
+        return
+
+    lines = ["🧱 Spam Log", ""]
+    for index, item in enumerate(events, start=1):
+        display_name = str(item.get("display_name") or "Unknown")
+        username = str(item.get("username") or "")
+        username_part = f" (@{username})" if username else ""
+        signals = ", ".join(item.get("signals") or []) or "none"
+        deleted = "yes" if item.get("deleted") else "no"
+        chat = str(item.get("chat_title") or item.get("chat_id") or "Private")
+        preview = str(item.get("message_preview") or "")
+        lines.extend(
+            [
+                f"{index}. {display_name}{username_part}",
+                f"Reason: {item.get('reason') or 'unknown'}",
+                f"Signals: {signals}",
+                f"Deleted: {deleted}",
+                f"Chat: {chat}",
+                f"Preview: {preview}",
+                "",
+            ]
+        )
+
+    await safe_reply(update, "\n".join(lines).strip(), parse_mode=None)
 
 
 async def cmd_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

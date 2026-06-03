@@ -334,6 +334,41 @@ async def handle_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("Unknown report action.", show_alert=True)
         return
 
+    if data.startswith("spam:"):
+        if not owner:
+            await query.answer("Owner only.", show_alert=True)
+            return
+
+        parts = data.split(":")
+        if len(parts) < 3:
+            await query.answer("Invalid spam action.", show_alert=True)
+            return
+
+        action = parts[1]
+        try:
+            target_user_id = int(parts[2])
+        except (TypeError, ValueError):
+            await query.answer("Invalid spam user.", show_alert=True)
+            return
+
+        if action == "keep":
+            await query.answer("✅ 已保持黑名单状态。", show_alert=True)
+            return
+
+        if action == "unblacklist":
+            try:
+                if blacklist.unban_user(target_user_id):
+                    await query.answer("♻️ 已移出黑名单。", show_alert=True)
+                else:
+                    await query.answer("ℹ️ 该用户当前不在黑名单。", show_alert=True)
+            except Exception as error:  # noqa: BLE001
+                log.error("Failed to unblacklist spam user %s: %s", target_user_id, error, exc_info=error)
+                await query.answer("⚠️ 移出黑名单失败。", show_alert=True)
+            return
+
+        await query.answer("Unknown spam action.", show_alert=True)
+        return
+
     if data.startswith("private:"):
         if not owner:
             await query.answer("Owner only.", show_alert=True)

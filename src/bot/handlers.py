@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import html
+import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ApplicationHandlerStop
@@ -12,6 +13,7 @@ from src.services.safety import safety_filter
 from src.services.blacklist_manager import blacklist
 from src.services.private_contacts import private_contacts
 from src.services.private_threads import private_threads
+from src.services.spam_events import spam_events
 from src.services.state_manager import state_manager
 from src.services.task_manager import task_manager  # NEW
 
@@ -247,6 +249,135 @@ def _build_sender_profile_lines(user) -> str:
     display_name = _escape_markdown_text(user.full_name or "Unknown")
     return f"👤 Sender: [{display_name}]({profile_url})\n🆔 User ID: {user.id}\n"
 
+
+def _message_text_or_caption(msg) -> str:
+    return (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
+
+
+async def _try_delete_message(msg) -> bool:
+    try:
+        await msg.delete()
+        return True
+    except Exception as error:  # noqa: BLE001
+        log.warning("Failed to delete spam message chat_id=%s message_id=%s: %s", msg.chat_id, msg.message_id, error)
+        return False
+
+
+def _spam_sender_keyboard(user) -> InlineKeyboardMarkup:
+    user_id = user.id if user else 0
+    sender_url = f"https://t.me/{user.username}" if user and user.username else f"tg://user?id={user_id}"
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("👁 View Sender", url=sender_url),
+                InlineKeyboardButton("✅ Keep Blacklisted", callback_data=f"spam:keep:{user_id}"),
+            ],
+            [InlineKeyboardButton("♻️ Unblacklist", callback_data=f"spam:unblacklist:{user_id}")],
+        ]
+    )
+
+
+async def _send_spam_owner_alert(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user,
+    chat,
+    spam_result: dict,
+    deleted: bool,
+    preview: str,
+) -> None:
+    sender_name = html.escape(user.full_name or "Unknown") if user else "Unknown"
+    username = f" (@{html.escape(user.username)})" if user and user.username else ""
+    user_id = str(user.id if user else "unknown")
+    chat_title = html.escape(getattr(chat, "title", None) or getattr(chat, "full_name", None) or "Private")
+    reason = html.escape(str(spam_result.get("reason") or "auto_spam_chinese_adblock"))
+    signals = ", ".join(spam_result.get("signals") or []) or "none"
+    preview_html = html.escape(preview[:500] or "(empty)")
+
+    alert = (
+        "🚫 <b>Spam Blocked</b>\n\n"
+        "Wanatring detected a high-confidence ad/spam message and added the sender to blacklist.\n\n"
+        f"👤 Sender: {sender_name}{username}\n"
+        f"🆔 User ID: <code>{html.escape(user_id)}</code>\n"
+        f"💬 Chat: {chat_title}\n"
+        f"🧠 Reason: {reason}\n"
+        f"📎 Signals: <code>{html.escape(signals)}</code>\n"
+        f"🧮 Score: <code>{html.escape(str(spam_result.get('score', 0)))}</code>\n"
+        f"🧹 Deleted: {'yes' if deleted else 'no'}\n"
+        "📌 Action: auto-blacklisted\n\n"
+        "📝 Preview:\n"
+        f"{preview_html}"
+    )
+
+    for owner_id in settings.OWNER_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=owner_id,
+                text=alert,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_spam_sender_keyboard(user),
+                disable_web_page_preview=True,
+            )
+        except Exception as error:  # noqa: BLE001
+            log.warning("Failed to send spam owner alert to %s: %s", owner_id, error)
+
+
+async def _auto_block_spam_sender(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    spam_result: dict,
+    text: str,
+) -> None:
+    msg = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+    if not msg or not user:
+        return
+
+    deleted = await _try_delete_message(msg)
+    blacklist.ban_user(user.id)
+    preview = text[:300]
+    try:
+        records = blacklist.data.setdefault("records", {})
+        key = str(user.id)
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        existing = records.get(key) if isinstance(records.get(key), dict) else {}
+        records[key] = {
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.full_name,
+            "reason": "auto_spam_chinese_adblock",
+            "first_seen": existing.get("first_seen") or now,
+            "last_seen": now,
+            "source_chat_id": chat.id if chat else None,
+            "source_chat_title": getattr(chat, "title", None) if chat else None,
+            "sample_text_preview": preview,
+        }
+        blacklist._save_db()
+    except Exception as error:  # noqa: BLE001
+        log.warning("Failed to persist spam blacklist metadata for user_id=%s: %s", user.id, error)
+    spam_events.add_event(
+        user_id=user.id,
+        username=user.username,
+        display_name=user.full_name,
+        chat_id=chat.id if chat else None,
+        chat_title=getattr(chat, "title", None) if chat else None,
+        reason="auto_spam_chinese_adblock",
+        score=int(spam_result.get("score") or 0),
+        signals=list(spam_result.get("signals") or []),
+        action="auto_blacklist",
+        deleted=deleted,
+        message_preview=preview,
+    )
+    await _send_spam_owner_alert(
+        context,
+        user=user,
+        chat=chat,
+        spam_result=spam_result,
+        deleted=deleted,
+        preview=preview,
+    )
+
 def _fmt_tags_hash(tags) -> str:
     """将标签列表/字符串统一转为 '#tag' 形式。"""
     if not tags:
@@ -268,6 +399,10 @@ async def gatekeeper_middleware(update: Update, context: ContextTypes.DEFAULT_TY
     user = update.effective_user
     if user and blacklist.is_banned(user.id):
         log.warning(f"🛑 Blocked interaction from banned user: {user.id} ({user.full_name})")
+        msg = update.effective_message
+        chat = update.effective_chat
+        if msg and chat and getattr(chat, "type", "") in {"group", "supergroup"}:
+            await _try_delete_message(msg)
         raise ApplicationHandlerStop
 
 
@@ -275,10 +410,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     msg = update.effective_message
 
     # Check if message exists (sometimes updates are just status changes)
-    if not msg or not msg.text:
+    if not msg:
         return
 
-    text = msg.text
+    text = _message_text_or_caption(msg)
+    if not text:
+        return
+
     user = update.effective_user
     chat_title = update.effective_chat.title
 
@@ -289,8 +427,15 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     # --- 1. Zero-Cost Safety Check ---
-    if safety_filter.is_obvious_spam(text):
-        log.info(f"🛡️ SPAM DETECTED (Layer 1) | Dropping message from {user.id}")
+    spam_result = safety_filter.analyze_spam(text)
+    if spam_result.get("is_spam"):
+        log.info(
+            "🛡️ SPAM DETECTED (Layer 1) | user_id=%s score=%s signals=%s",
+            user.id if user else "unknown",
+            spam_result.get("score"),
+            spam_result.get("signals"),
+        )
+        await _auto_block_spam_sender(update, context, spam_result, text)
         return
 
     # --- 2. Relevance Trigger Check ---
@@ -378,10 +523,11 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
     if not msg or not user:
         return
 
-    text = msg.text or ""
+    text = _message_text_or_caption(msg)
 
     # 0. Safety Check
-    if safety_filter.is_obvious_spam(text):
+    spam_result = safety_filter.analyze_spam(text)
+    if spam_result.get("is_spam"):
         if user.id not in settings.OWNER_IDS:
             private_contacts.upsert_from_user(
                 user,
@@ -389,6 +535,7 @@ async def handle_private_message(update: Update, context: ContextTypes.DEFAULT_T
                 priority="urgent",
                 summary=text[:120],
             )
+            await _auto_block_spam_sender(update, context, spam_result, text)
         return
 
     mode = state_manager.get_mode(user.id)
