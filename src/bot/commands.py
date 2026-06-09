@@ -113,11 +113,26 @@ def split_long_message(lines: Iterable[str], limit: int = 3500) -> list[str]:
     return chunks
 
 
+def render_customer_start_text() -> str:
+    return (
+        "🌿 Atrioly · Wanatring\n\n"
+        "你好呀，我在这里。\n\n"
+        "当前模式：留言转达模式 📨\n\n"
+        "你可以直接把想说的话发给我。\n"
+        "无论是咨询、说明情况，还是临时留言，我都会帮你安静地递给主人。\n\n"
+        "他看到后会尽快回复你。"
+    )
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_owner(update):
+        await safe_reply(update, render_customer_start_text(), parse_mode=None)
+        return
+
     await safe_reply(
         update,
         render_home_text(update),
-        reply_markup=build_home_keyboard(is_owner(update)),
+        reply_markup=build_home_keyboard(True),
     )
 
 
