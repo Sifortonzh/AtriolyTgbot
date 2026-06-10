@@ -7,6 +7,7 @@ from typing import Any
 
 from telegram import Update
 from telegram.error import TelegramError
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -202,7 +203,18 @@ def register_message_handlers(application: Application[Any, Any, Any, Any, Any, 
 
 def build_application() -> Application[Any, Any, Any, Any, Any, Any]:
     """Build and configure the Telegram application."""
-    application = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN).build()
+    builder = ApplicationBuilder().token(settings.TELEGRAM_BOT_TOKEN)
+    if settings.telegram_proxy_url:
+        request = HTTPXRequest(
+            proxy_url=settings.telegram_proxy_url,
+            connect_timeout=10.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=10.0,
+        )
+        builder = builder.request(request)
+
+    application = builder.build()
 
     application.add_error_handler(global_error_handler)
     register_middlewares(application)

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     # Credentials
     TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_PROXY_URL: str | None = None
     AI_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
     DEEPSEEK_API_KEY: str | None = None
@@ -104,6 +105,7 @@ class Settings(BaseSettings):
         "DEEPSEEK_API_KEY",
         "ANTHROPIC_API_KEY",
         "OPENAI_COMPATIBLE_API_KEY",
+        "TELEGRAM_PROXY_URL",
         "RADAR_MODEL",
         "PRIVATE_MODEL",
         "TASK_MODEL",
@@ -470,6 +472,10 @@ class Settings(BaseSettings):
     def is_owner(self, user_id: int | None) -> bool:
         return user_id is not None and user_id in self.OWNER_IDS
 
+    @property
+    def telegram_proxy_url(self) -> str | None:
+        return self.TELEGRAM_PROXY_URL
+
     def get_forward_targets(self) -> List[int]:
         """Return configured Telegram chat IDs that receive radar alerts."""
         return self.FORWARD_TO
@@ -493,6 +499,7 @@ class Settings(BaseSettings):
             "vision_model": self.get_model_for_task("vision"),
             "active_ai_key_configured": self.active_ai_key_configured(),
             "active_ai_provider_ready": self.active_ai_provider_ready(),
+            "telegram_proxy_configured": bool(self.telegram_proxy_url),
             "log_level": self.LOG_LEVEL,
             "data_dir": self.DATA_DIR,
             "owners": len(self.OWNER_IDS),
